@@ -30,7 +30,7 @@ export const createUserSchema = z.object({
 });
 
 /**
- * Esquema para actualizar un usuario existente (todos los campos opcionales).
+ * Esquema para actualizar un usuario existente.
  */
 export const updateUserSchema = z.object({
   name: z.string().min(2).max(50).optional(),
@@ -42,6 +42,7 @@ export const updateUserSchema = z.object({
 
 /**
  * Esquema para crear una tarea.
+ * No acepta userId en el body: la tarea pertenece estrictamente al usuario logueado en el token.
  */
 export const createTaskSchema = z.object({
   title: z
@@ -49,8 +50,7 @@ export const createTaskSchema = z.object({
     .min(3, { message: 'El título debe tener al menos 3 caracteres' })
     .max(100, { message: 'El título no puede exceder 100 caracteres' }),
   description: z.string().optional().default(''),
-  completed: z.boolean().optional().default(false),
-  userId: z.string().optional() // Si no se provee, se usará el usuario autenticado
+  completed: z.boolean().optional().default(false)
 });
 
 /**
@@ -59,8 +59,7 @@ export const createTaskSchema = z.object({
 export const updateTaskSchema = z.object({
   title: z.string().min(3).max(100).optional(),
   description: z.string().optional(),
-  completed: z.boolean().optional(),
-  userId: z.string().optional()
+  completed: z.boolean().optional()
 }).refine((data) => Object.keys(data).length > 0, {
-  message: 'Debes proporcionar al menos un campo para actualizar (title, description, completed o userId)'
+  message: 'Debes proporcionar al menos un campo para actualizar (title, description o completed)'
 });
