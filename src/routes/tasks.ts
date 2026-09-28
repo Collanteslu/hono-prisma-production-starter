@@ -8,29 +8,41 @@ export const taskRoutes = new Hono<AppEnv>();
 
 /**
  * GET /api/tasks
- * Lista todas las tareas disponibles.
- * Permite filtrar por usuario mediante query param opcional: ?userId=user-1
+ * Lista de tareas con aislamiento de seguridad:
+ * - Usuario estándar ('user'): SOLO ve sus propias tareas.
+ * - Administrador ('admin'): Puede ver todas las tareas o filtrar por ?userId=...
  */
 taskRoutes.get('/', (c) => {
+  const currentUser = c.get('user');
   const queryUserId = c.req.query('userId');
 
-  const filteredTasks = queryUserId
-    ? tasks.filter((t) => t.userId === queryUserId)
-    : tasks;
+  let resultTasks: Task[];
+
+  if (currentUser.role === 'admin') {
+    // El admin puede ver todas o filtrar opcionalmente por usuario
+    resultTasks = queryUserId
+      ? tasks.filter((t) => t.userId === queryUserId)
+      : tasks;
+  } else {
+    // Seguridad: Un usuario normal solo recibe las tareas que le pertenecen
+    resultTasks = tasks.filter((t) => t.userId === currentUser.userId);
+  }
 
   return c.json({
     success: true,
-    count: filteredTasks.length,
-    data: filteredTasks
+    count: resultTasks.length,
+    data: resultTasks
   });
 });
 
 /**
  * GET /api/tasks/:id
- * Obtiene el detalle de una tarea por su ID.
+ * Obtiene el detalle de una tarea específica con control de acceso (ownership):
+ * - Si la tarea no le pertenece al usuario (y no es admin), devuelve 403 Forbidden.
  */
 taskRoutes.get('/:id', (c) => {
   const id = c.req.param('id');
+  const currentUser = c.get('user');
   const task = tasks.find((t) => t.id === id);
 
   if (!task) {
@@ -43,6 +55,17 @@ taskRoutes.get('/:id', (c) => {
     );
   }
 
+  // Comprobación de propiedad (Ownership Check)
+  if (task.userId !== currentUser.userId && currentUser.role !== 'admin') {
+    return c.json(
+      {
+        success: false,
+        message: 'Acceso denegado: No tienes permiso para ver esta tarea porque pertenece a otro usuario.'
+      },
+      403
+    );
+  }
+
   return c.json({
     success: true,
     data: task
@@ -51,8 +74,10 @@ taskRoutes.get('/:id', (c) => {
 
 /**
  * POST /api/tasks
- * Crea una nueva tarea asociada a un usuario, validando la entrada con Zod.
- * Si no se especifica 'userId' en el cuerpo, se asocia automáticamente al usuario autenticado.
+ * Crea una nueva tarea asociada a un usuario.
+ * Seguridad:
+ * - Usuario estándar: La tarea se asigna SIEMPRE a su propio userId extraído del token JWT.
+ * - Admin: Puede asignar la tarea a cualquier userId que indique en el body.
  */
 taskRoutes.post(
   '/',
@@ -72,34 +97,30 @@ taskRoutes.post(
     const { title, description, completed, userId } = c.req.valid('json');
     const currentUser = c.get('user');
 
-    // Determinamos qué usuario será el dueño de la tarea
-    const targetUserId = userId || currentUser?.userId;
+    // Determinamos el usuario de forma segura
+    let assignedUserId: string;
 
-    if (!targetUserId) {
-      return c.json(
-        {
-          success: false,
-          message: 'No se pudo determinar el usuario para asignar la tarea.'
-        },
-        400
-      );
-    }
-
-    // Validamos que el usuario realmente exista en el sistema
-    const userExists = users.some((u) => u.id === targetUserId);
-    if (!userExists) {
-      return c.json(
-        {
-          success: false,
-          message: `El usuario con id '${targetUserId}' no existe.`
-        },
-        404
-      );
+    if (currentUser.role === 'admin' && userId) {
+      // El admin puede asignar a otro usuario; verificamos que ese usuario exista
+      const userExists = users.some((u) => u.id === userId);
+      if (!userExists) {
+        return c.json(
+          {
+            success: false,
+            message: `El usuario con id '${userId}' no existe.`
+          },
+          404
+        );
+      }
+      assignedUserId = userId;
+    } else {
+      // Usuario regular: NUNCA se fía del body, se fuerza su propio userId autenticado
+      assignedUserId = currentUser.userId;
     }
 
     const newTask: Task = {
       id: `task-${Date.now()}`,
-      userId: targetUserId,
+      userId: assignedUserId,
       title,
       description: description || '',
       completed: Boolean(completed),
@@ -121,7 +142,7 @@ taskRoutes.post(
 
 /**
  * PUT /api/tasks/:id
- * Actualiza una tarea existente previa validación Zod.
+ * Actualiza una tarea existente validando la propiedad de la misma.
  */
 taskRoutes.put(
   '/:id',
@@ -139,6 +160,7 @@ taskRoutes.put(
   }),
   async (c) => {
     const id = c.req.param('id');
+    const currentUser = c.get('user');
     const taskIndex = tasks.findIndex((t) => t.id === id);
 
     if (taskIndex === -1) {
@@ -151,16 +173,37 @@ taskRoutes.put(
       );
     }
 
+    // Comprobación de permisos
+    const currentTask = tasks[taskIndex];
+    if (currentTask.userId !== currentUser.userId && currentUser.role !== 'admin') {
+      return c.json(
+        {
+          success: false,
+          message: 'Acceso denegado: No tienes permiso para editar tareas de otros usuarios.'
+        },
+        403
+      );
+    }
+
     const { title, description, completed, userId } = c.req.valid('json');
 
-    // Si se desea reasignar la tarea a otro usuario, verificamos que el nuevo usuario exista
+    // Solo un admin tiene permiso para reasignar tareas a otros usuarios
     if (userId) {
+      if (currentUser.role !== 'admin') {
+        return c.json(
+          {
+            success: false,
+            message: 'Acceso denegado: Solo administradores pueden reasignar tareas.'
+          },
+          403
+        );
+      }
       const userExists = users.some((u) => u.id === userId);
       if (!userExists) {
         return c.json(
           {
             success: false,
-            message: `El usuario con id '${userId}' no existe para reasignar la tarea.`
+            message: `El usuario con id '${userId}' no existe.`
           },
           404
         );
@@ -182,10 +225,11 @@ taskRoutes.put(
 
 /**
  * DELETE /api/tasks/:id
- * Elimina una tarea por su identificador.
+ * Elimina una tarea solo si le pertenece al usuario actual (o si es admin).
  */
 taskRoutes.delete('/:id', (c) => {
   const id = c.req.param('id');
+  const currentUser = c.get('user');
   const taskIndex = tasks.findIndex((t) => t.id === id);
 
   if (taskIndex === -1) {
@@ -195,6 +239,18 @@ taskRoutes.delete('/:id', (c) => {
         message: `Tarea con id '${id}' no encontrada.`
       },
       404
+    );
+  }
+
+  // Comprobación de permisos
+  const currentTask = tasks[taskIndex];
+  if (currentTask.userId !== currentUser.userId && currentUser.role !== 'admin') {
+    return c.json(
+      {
+        success: false,
+        message: 'Acceso denegado: No tienes permiso para eliminar tareas de otros usuarios.'
+      },
+      403
     );
   }
 
