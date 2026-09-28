@@ -1,0 +1,23 @@
+meta {
+  name: Create Task
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/api/tasks
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "title": "Aprender Bruno API Client",
+    "description": "Probar las peticiones desde la coleccion local de Bruno",
+    "completed": false
+  }
+}

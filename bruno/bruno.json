@@ -1,0 +1,9 @@
+{
+  "version": "1",
+  "name": "Hono API - Users & Tasks",
+  "type": "collection",
+  "ignore": [
+    "node_modules",
+    ".git"
+  ]
+}

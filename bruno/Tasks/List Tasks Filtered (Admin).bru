@@ -1,0 +1,15 @@
+meta {
+  name: List Tasks Filtered (Admin)
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/api/tasks?userId=user-1
+  body: none
+  auth: none
+}
+
+params:query {
+  userId: user-1
+}
