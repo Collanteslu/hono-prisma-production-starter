@@ -1,7 +1,9 @@
 import { Hono } from 'hono';
 import { sign } from 'hono/jwt';
+import { zValidator } from '@hono/zod-validator';
 import { users } from '../db.js';
 import { JWT_SECRET } from '../middleware/auth.js';
+import { loginSchema } from '../schemas/index.js';
 
 export const authRoutes = new Hono();
 
@@ -9,28 +11,26 @@ export const authRoutes = new Hono();
  * POST /api/auth/login
  * Endpoint público para iniciar sesión y obtener un JWT.
  * 
- * Flujo:
- * 1. Recibe 'email' y 'password' en el cuerpo JSON.
- * 2. Busca al usuario en la base de datos simulada.
- * 3. Valida credenciales.
- * 4. Firma un token JWT con tiempo de expiración (24 horas).
- * 5. Devuelve el token y los datos esenciales del usuario.
+ * Valida automáticamente el body con Zod mediante zValidator.
+ * Si falla, retorna HTTP 400 con los errores estructurados.
  */
-authRoutes.post('/login', async (c) => {
-  try {
-    const body = await c.req.json();
-    const { email, password } = body;
-
-    // Validación básica de campos requeridos
-    if (!email || !password) {
+authRoutes.post(
+  '/login',
+  zValidator('json', loginSchema, (result, c) => {
+    if (!result.success) {
       return c.json(
         {
           success: false,
-          message: 'Email y contraseña son obligatorios'
+          message: 'Error de validación en los datos de entrada',
+          errors: result.error.flatten().fieldErrors
         },
         400
       );
     }
+  }),
+  async (c) => {
+    // Obtenemos los datos ya validados y tipados por Zod
+    const { email, password } = c.req.valid('json');
 
     // Buscamos al usuario por correo
     const user = users.find((u) => u.email.toLowerCase() === email.toLowerCase());
@@ -54,7 +54,8 @@ authRoutes.post('/login', async (c) => {
         role: user.role,
         exp
       },
-      JWT_SECRET
+      JWT_SECRET,
+      'HS256'
     );
 
     return c.json({
@@ -68,13 +69,5 @@ authRoutes.post('/login', async (c) => {
         role: user.role
       }
     });
-  } catch (err) {
-    return c.json(
-      {
-        success: false,
-        message: 'Error al procesar la solicitud de inicio de sesión'
-      },
-      500
-    );
   }
-});
+);

@@ -1,13 +1,17 @@
-# API REST con Hono, TypeScript, Autenticación JWT, Usuarios y Tareas
+# API REST con Hono, TypeScript, Autenticación JWT y Validación Zod
 
-Esta es una API REST construida con **[Hono](https://hono.dev/)** y **TypeScript** ejecutándose sobre **Node.js** con `@hono/node-server`.
+Esta es una API REST profesional construida con **[Hono](https://hono.dev/)**, **TypeScript**, **JWT** y **[Zod](https://zod.dev/)** ejecutándose sobre **Node.js** con `@hono/node-server`.
 
-Incluye:
-- **Autenticación con JWT**: Rutas públicas y privadas mediante middleware.
+---
+
+## Características Principales
+
+- **Validación Estricta con Zod y `@hono/zod-validator`**: Todos los payloads (login, crear/actualizar usuario, crear/actualizar tarea) pasan por esquemas de Zod antes de llegar a los controladores.
+- **Autenticación con JWT (`hono/jwt`)**: Emisión de tokens firmados con `HS256`, expiración y verificación mediante middleware nativo.
 - **CRUD completo de Usuarios**: Crear, listar, consultar por ID, actualizar y borrar.
-- **CRUD completo de Tareas asociadas a Usuarios**: Crear tareas para un usuario, listar (con filtro por usuario `?userId=`), actualizar estado y eliminar.
-- **Eliminación en cascada**: Al eliminar un usuario, se eliminan automáticamente todas sus tareas asociadas.
-- **Arquitectura limpia y modular**: Middlewares, rutas modulares, tipado estricto con TypeScript y base de datos en memoria para pruebas instantáneas.
+- **CRUD completo de Tareas asociadas a Usuarios**: Crear tareas asignadas a un usuario, listar (con filtro por usuario `?userId=`), actualizar estado y eliminar.
+- **Eliminación en cascada**: Al borrar un usuario, se eliminan automáticamente todas sus tareas asociadas.
+- **Tipado estricto extremo con TypeScript**: Integración de esquemas Zod con `c.req.valid('json')` y contexto tipado con `AppEnv`.
 
 ---
 
@@ -15,21 +19,23 @@ Incluye:
 
 ```text
 hono-test/
-├── package.json          # Dependencias y scripts
+├── package.json          # Dependencias (hono, zod, @hono/zod-validator, tsx, typescript)
 ├── tsconfig.json          # Configuración de TypeScript (ESNext / NodeNext)
 ├── test-api.sh           # Script de pruebas automatizadas con curl
-├── README.md             # Esta guía detallada
+├── README.md             # Documentación detallada
 └── src/
-    ├── index.ts          # Servidor principal y middlewares globales
+    ├── index.ts          # Servidor principal y middlewares globales (logger, cors, prettyJSON)
     ├── db.ts             # Base de datos simulada en memoria
     ├── types/
-    │   └── index.ts      # Modelos de TypeScript (User, Task, JwtPayload, AppEnv)
+    │   └── index.ts      # Modelos TypeScript e interfaces de la aplicación
+    ├── schemas/
+    │   └── index.ts      # Esquemas de validación Zod (login, usuarios, tareas)
     ├── middleware/
-    │   └── auth.ts       # Middleware de validación JWT (Bearer Token)
+    │   └── auth.ts       # Middleware de autenticación JWT (Bearer Token)
     └── routes/
-        ├── auth.ts       # Endpoint POST /api/auth/login
-        ├── users.ts      # Endpoints CRUD de usuarios (/api/users)
-        └── tasks.ts      # Endpoints CRUD de tareas (/api/tasks)
+        ├── auth.ts       # Endpoint POST /api/auth/login validado con Zod
+        ├── users.ts      # Endpoints CRUD de usuarios validados con Zod
+        └── tasks.ts      # Endpoints CRUD de tareas validados con Zod
 ```
 
 ---
@@ -41,14 +47,9 @@ hono-test/
 
 ---
 
-## 2. Instalación y Puesta en Marcha
+## 2. Puesta en Marcha
 
-### Instalar dependencias (si partes de cero)
-```bash
-npm install
-```
-
-### Iniciar en modo desarrollo (Hot-reload con `tsx`)
+### Iniciar en modo desarrollo (Hot-reload)
 ```bash
 npm run dev
 ```
@@ -60,47 +61,53 @@ http://localhost:3000
 
 ---
 
-## 3. Datos de Prueba Preexistentes
+## 3. Esquemas de Validación (Zod)
 
-Para probar inmediatamente sin necesidad de registrar datos manualmente, la base de datos en memoria incluye:
+Los esquemas residen en `src/schemas/index.ts`:
 
-- **Usuario Admin:**
-  - **Email:** `admin@example.com`
-  - **Password:** `password123`
-  - **ID:** `user-1`
-- **Usuario Regular:**
-  - **Email:** `ana@example.com`
-  - **Password:** `password123`
-  - **ID:** `user-2`
+1. **`loginSchema`**:
+   - `email`: Formato email válido y obligatorio.
+   - `password`: Mínimo 6 caracteres.
+
+2. **`createUserSchema`**:
+   - `name`: String de entre 2 y 50 caracteres.
+   - `email`: Formato email válido.
+   - `password`: Mínimo 6 caracteres.
+   - `role`: `'admin'` o `'user'` (opcional, default: `'user'`).
+
+3. **`updateUserSchema`**:
+   - Campos `name`, `email`, `password` opcionales, pero exige enviar al menos uno.
+
+4. **`createTaskSchema`**:
+   - `title`: String de 3 a 100 caracteres.
+   - `description`: Opcional.
+   - `completed`: Booleano opcional (default: `false`).
+   - `userId`: Opcional (si no se especifica, toma el ID del usuario autenticado).
+
+5. **`updateTaskSchema`**:
+   - Actualización parcial de `title`, `description`, `completed` o reasignación de `userId`.
 
 ---
 
-## 4. Endpoints de la API
+## 4. Endpoints y Ejemplos con `curl`
 
 ###  Autenticación
 
-| Método | Endpoint | Descripción | Requiere Token |
-|---|---|---|---|
-| `POST` | `/api/auth/login` | Inicia sesión y genera el JWT | No |
-
-**Ejemplo de Petición Login:**
+#### Iniciar Sesión (Login)
 ```bash
 curl -X POST http://localhost:3000/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email":"admin@example.com", "password":"password123"}'
 ```
 
-**Respuesta:**
+*Ejemplo de respuesta con error de validación Zod si envías datos incorrectos:*
 ```json
 {
-  "success": true,
-  "message": "Inicio de sesión exitoso",
-  "token": "eyJhbGciOiJIUzI1NiIs...",
-  "user": {
-    "id": "user-1",
-    "name": "Luis Admin",
-    "email": "admin@example.com",
-    "role": "admin"
+  "success": false,
+  "message": "Error de validación en los datos de entrada",
+  "errors": {
+    "email": ["El formato del correo electrónico no es válido"],
+    "password": ["La contraseña debe tener al menos 6 caracteres"]
   }
 }
 ```
@@ -108,92 +115,57 @@ curl -X POST http://localhost:3000/api/auth/login \
 ---
 
 ###  Usuarios (`/api/users`)
-*Todos estos endpoints requieren la cabecera: `Authorization: Bearer <TOKEN>`*
+*Requiere `Authorization: Bearer <TOKEN>`*
 
-| Método | Endpoint | Descripción |
-|---|---|---|
-| `GET` | `/api/users` | Listar todos los usuarios |
-| `GET` | `/api/users/:id` | Ver un usuario específico |
-| `POST` | `/api/users` | Crear un nuevo usuario |
-| `PUT` | `/api/users/:id` | Actualizar nombre, email o contraseña |
-| `DELETE` | `/api/users/:id` | Eliminar usuario y sus tareas (en cascada) |
+- `GET /api/users` - Lista todos los usuarios.
+- `GET /api/users/:id` - Detalle de un usuario.
+- `POST /api/users` - Crear usuario (validado con `createUserSchema`).
+- `PUT /api/users/:id` - Actualizar usuario (validado con `updateUserSchema`).
+- `DELETE /api/users/:id` - Eliminar usuario y sus tareas en cascada.
 
-#### Crear Usuario
 ```bash
+# Crear Usuario
 curl -X POST http://localhost:3000/api/users \
   -H "Authorization: Bearer <TOKEN>" \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Carlos Lopez",
     "email": "carlos@example.com",
-    "password": "pass123Segura",
+    "password": "password123",
     "role": "user"
   }'
-```
-
-#### Actualizar Usuario
-```bash
-curl -X PUT http://localhost:3000/api/users/<USER_ID> \
-  -H "Authorization: Bearer <TOKEN>" \
-  -H "Content-Type: application/json" \
-  -d '{"name": "Carlos López Modificado"}'
-```
-
-#### Eliminar Usuario
-```bash
-curl -X DELETE http://localhost:3000/api/users/<USER_ID> \
-  -H "Authorization: Bearer <TOKEN>"
 ```
 
 ---
 
 ### 📋 Tareas (`/api/tasks`)
-*Todos estos endpoints requieren la cabecera: `Authorization: Bearer <TOKEN>`*
+*Requiere `Authorization: Bearer <TOKEN>`*
 
-| Método | Endpoint | Descripción |
-|---|---|---|
-| `GET` | `/api/tasks` | Listar todas las tareas (o filtrar con `?userId=<id>`) |
-| `GET` | `/api/tasks/:id` | Ver una tarea específica |
-| `POST` | `/api/tasks` | Crear una nueva tarea asignada a un usuario |
-| `PUT` | `/api/tasks/:id` | Actualizar título, descripción, completada o reasignar |
-| `DELETE` | `/api/tasks/:id` | Eliminar una tarea |
+- `GET /api/tasks` - Lista todas las tareas (soporta `?userId=<id>`).
+- `GET /api/tasks/:id` - Detalle de una tarea.
+- `POST /api/tasks` - Crear tarea asociada a un usuario (validado con `createTaskSchema`).
+- `PUT /api/tasks/:id` - Actualizar tarea (validado con `updateTaskSchema`).
+- `DELETE /api/tasks/:id` - Eliminar tarea.
 
-#### Crear Tarea para un Usuario
-> Si no pasas `userId`, se asignará automáticamente al usuario dueño del token.
 ```bash
+# Crear Tarea para un usuario
 curl -X POST http://localhost:3000/api/tasks \
   -H "Authorization: Bearer <TOKEN>" \
   -H "Content-Type: application/json" \
   -d '{
-    "title": "Aprender Hono y TypeScript",
-    "description": "Completar la guía y revisar el código de rutas",
+    "title": "Aprender Hono con Zod y JWT",
+    "description": "Completar la validación y pruebas de la API",
     "userId": "user-1",
     "completed": false
   }'
 ```
 
-#### Listar Tareas de un Usuario Específico
-```bash
-curl -X GET "http://localhost:3000/api/tasks?userId=user-1" \
-  -H "Authorization: Bearer <TOKEN>"
-```
-
-#### Actualizar Tarea (Marcar como completada)
-```bash
-curl -X PUT http://localhost:3000/api/tasks/<TASK_ID> \
-  -H "Authorization: Bearer <TOKEN>" \
-  -H "Content-Type: application/json" \
-  -d '{"completed": true}'
-```
-
 ---
 
-## 5. Pruebas Automatizadas en un Solo Paso
+## 5. Pruebas Automatizadas
 
-Se incluye el script ejecutable `test-api.sh` que prueba todo el ciclo de vida (login, tokens, CRUD de usuarios y tareas, filtros y borrado en cascada):
+Ejecuta el script de prueba integrado que comprueba todo el flujo de inicio a fin:
 
-1. Asegúrate de tener el servidor corriendo (`npm run dev`).
-2. En otra terminal ejecuta:
 ```bash
 ./test-api.sh
 ```

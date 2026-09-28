@@ -1,6 +1,8 @@
 import { Hono } from 'hono';
+import { zValidator } from '@hono/zod-validator';
 import { users, tasks } from '../db.js';
 import { User, AppEnv } from '../types/index.js';
+import { createUserSchema, updateUserSchema } from '../schemas/index.js';
 
 export const userRoutes = new Hono<AppEnv>();
 
@@ -50,24 +52,25 @@ userRoutes.get('/:id', (c) => {
 
 /**
  * POST /api/users
- * Crea un nuevo usuario.
+ * Crea un nuevo usuario con validación estricta de Zod.
  * Solo administradores pueden asignar roles de 'admin'; por defecto se crea con rol 'user'.
  */
-userRoutes.post('/', async (c) => {
-  try {
-    const body = await c.req.json();
-    const { name, email, password, role } = body;
-
-    // Validaciones de entrada
-    if (!name || !email || !password) {
+userRoutes.post(
+  '/',
+  zValidator('json', createUserSchema, (result, c) => {
+    if (!result.success) {
       return c.json(
         {
           success: false,
-          message: 'Los campos name, email y password son requeridos.'
+          message: 'Error de validación al crear usuario',
+          errors: result.error.flatten().fieldErrors
         },
         400
       );
     }
+  }),
+  async (c) => {
+    const { name, email, password, role } = c.req.valid('json');
 
     // Verificar si el email ya existe
     const exists = users.some((u) => u.email.toLowerCase() === email.toLowerCase());
@@ -105,23 +108,28 @@ userRoutes.post('/', async (c) => {
       },
       201
     );
-  } catch (error) {
-    return c.json(
-      {
-        success: false,
-        message: 'Cuerpo de la petición inválido o malformado.'
-      },
-      400
-    );
   }
-});
+);
 
 /**
  * PUT /api/users/:id
- * Actualiza los datos de un usuario existente (name, email, password).
+ * Actualiza los datos de un usuario existente previa validación Zod.
  */
-userRoutes.put('/:id', async (c) => {
-  try {
+userRoutes.put(
+  '/:id',
+  zValidator('json', updateUserSchema, (result, c) => {
+    if (!result.success) {
+      return c.json(
+        {
+          success: false,
+          message: 'Error de validación al actualizar usuario',
+          errors: result.error.flatten().fieldErrors
+        },
+        400
+      );
+    }
+  }),
+  async (c) => {
     const id = c.req.param('id');
     const userIndex = users.findIndex((u) => u.id === id);
 
@@ -135,8 +143,7 @@ userRoutes.put('/:id', async (c) => {
       );
     }
 
-    const body = await c.req.json();
-    const { name, email, password } = body;
+    const { name, email, password } = c.req.valid('json');
 
     // Si intenta cambiar el email, validamos que no pertenezca a otro usuario
     if (email && email.toLowerCase() !== users[userIndex].email.toLowerCase()) {
@@ -163,16 +170,8 @@ userRoutes.put('/:id', async (c) => {
       message: 'Usuario actualizado correctamente.',
       data: sanitizeUser(users[userIndex])
     });
-  } catch (error) {
-    return c.json(
-      {
-        success: false,
-        message: 'Error al actualizar el usuario.'
-      },
-      400
-    );
   }
-});
+);
 
 /**
  * DELETE /api/users/:id

@@ -1,6 +1,8 @@
 import { Hono } from 'hono';
+import { zValidator } from '@hono/zod-validator';
 import { tasks, users } from '../db.js';
 import { Task, AppEnv } from '../types/index.js';
+import { createTaskSchema, updateTaskSchema } from '../schemas/index.js';
 
 export const taskRoutes = new Hono<AppEnv>();
 
@@ -49,29 +51,29 @@ taskRoutes.get('/:id', (c) => {
 
 /**
  * POST /api/tasks
- * Crea una nueva tarea asociada a un usuario.
- * Si no se especifica 'userId' en el cuerpo, se asocia automáticamente
- * al usuario autenticado en la sesión.
+ * Crea una nueva tarea asociada a un usuario, validando la entrada con Zod.
+ * Si no se especifica 'userId' en el cuerpo, se asocia automáticamente al usuario autenticado.
  */
-taskRoutes.post('/', async (c) => {
-  try {
-    const body = await c.req.json();
-    const { title, description, completed, userId } = body;
-    const currentUser = c.get('user');
-
-    // Determinamos qué usuario será el dueño de la tarea
-    // Si se envía userId en el body, se utiliza ese; de lo contrario, el usuario en sesión
-    const targetUserId = userId || currentUser?.userId;
-
-    if (!title) {
+taskRoutes.post(
+  '/',
+  zValidator('json', createTaskSchema, (result, c) => {
+    if (!result.success) {
       return c.json(
         {
           success: false,
-          message: 'El título de la tarea es obligatorio.'
+          message: 'Error de validación al crear tarea',
+          errors: result.error.flatten().fieldErrors
         },
         400
       );
     }
+  }),
+  async (c) => {
+    const { title, description, completed, userId } = c.req.valid('json');
+    const currentUser = c.get('user');
+
+    // Determinamos qué usuario será el dueño de la tarea
+    const targetUserId = userId || currentUser?.userId;
 
     if (!targetUserId) {
       return c.json(
@@ -114,23 +116,28 @@ taskRoutes.post('/', async (c) => {
       },
       201
     );
-  } catch (error) {
-    return c.json(
-      {
-        success: false,
-        message: 'Cuerpo de la petición inválido.'
-      },
-      400
-    );
   }
-});
+);
 
 /**
  * PUT /api/tasks/:id
- * Actualiza una tarea existente (título, descripción, estado completado o usuario asignado).
+ * Actualiza una tarea existente previa validación Zod.
  */
-taskRoutes.put('/:id', async (c) => {
-  try {
+taskRoutes.put(
+  '/:id',
+  zValidator('json', updateTaskSchema, (result, c) => {
+    if (!result.success) {
+      return c.json(
+        {
+          success: false,
+          message: 'Error de validación al actualizar tarea',
+          errors: result.error.flatten().fieldErrors
+        },
+        400
+      );
+    }
+  }),
+  async (c) => {
     const id = c.req.param('id');
     const taskIndex = tasks.findIndex((t) => t.id === id);
 
@@ -144,8 +151,7 @@ taskRoutes.put('/:id', async (c) => {
       );
     }
 
-    const body = await c.req.json();
-    const { title, description, completed, userId } = body;
+    const { title, description, completed, userId } = c.req.valid('json');
 
     // Si se desea reasignar la tarea a otro usuario, verificamos que el nuevo usuario exista
     if (userId) {
@@ -164,23 +170,15 @@ taskRoutes.put('/:id', async (c) => {
 
     if (title !== undefined) tasks[taskIndex].title = title;
     if (description !== undefined) tasks[taskIndex].description = description;
-    if (completed !== undefined) tasks[taskIndex].completed = Boolean(completed);
+    if (completed !== undefined) tasks[taskIndex].completed = completed;
 
     return c.json({
       success: true,
       message: 'Tarea actualizada exitosamente.',
       data: tasks[taskIndex]
     });
-  } catch (error) {
-    return c.json(
-      {
-        success: false,
-        message: 'Error al actualizar la tarea.'
-      },
-      400
-    );
   }
-});
+);
 
 /**
  * DELETE /api/tasks/:id

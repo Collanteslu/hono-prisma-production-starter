@@ -10,7 +10,9 @@
   },
   "dependencies": {
     "@hono/node-server": "^2.1.1",
-    "hono": "^4.13.10"
+    "@hono/zod-validator": "^0.9.1",
+    "hono": "^4.13.10",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/node": "^26.6.3",
