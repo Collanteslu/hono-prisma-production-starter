@@ -1,0 +1,34 @@
+# Dependencias de paquetes
+node_modules/
+package-lock.json.backup
+
+# Archivos de compilación y salida TypeScript
+dist/
+build/
+*.tsbuildinfo
+
+# Entornos y variables secretas
+.env
+.env.*
+!.env.example
+
+# Logs de depuración y ejecución
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Archivos del sistema operativo y editores
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Cobertura de tests y temporales
+coverage/
+.temp/
+.cache/
