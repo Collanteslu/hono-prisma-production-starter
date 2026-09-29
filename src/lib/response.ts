@@ -5,7 +5,9 @@
  */
 
 import type { Context } from "hono";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { AppEnv, PaginationMeta, ResponseMeta } from "../types/index.js";
+import { API_VERSION } from "./version.js";
 
 /**
  * Builds standard telemetry metadata for an HTTP response based on context variables.
@@ -19,7 +21,22 @@ export function buildMeta(c: Context<AppEnv>): ResponseMeta {
     requestId,
     timestamp: new Date().toISOString(),
     durationMs,
-    apiVersion: "1.1.0",
+    apiVersion: API_VERSION,
+  };
+}
+
+/**
+ * Builds pagination metadata for list endpoints.
+ */
+export function buildPagination(total: number, page: number, limit: number): PaginationMeta {
+  const totalPages = Math.ceil(total / limit) || 1;
+  return {
+    total,
+    page,
+    limit,
+    totalPages,
+    hasNextPage: page < totalPages,
+    hasPrevPage: page > 1,
   };
 }
 
@@ -38,7 +55,7 @@ export function successResponse<T>(
   const status = options?.status || 200;
   return c.json(
     {
-      success: true,
+      success: true as const,
       message: options?.message,
       data,
       pagination: options?.pagination,
@@ -51,15 +68,15 @@ export function successResponse<T>(
 /**
  * Helper to return a standardized error JSON response with telemetry metadata.
  */
-export function errorResponse(
+export function errorResponse<S extends ContentfulStatusCode = 400>(
   c: Context<AppEnv>,
   message: string,
-  status: 400 | 401 | 403 | 404 | 409 | 413 | 422 | 429 | 500 = 400,
+  status: S = 400 as S,
   details?: unknown,
 ) {
   return c.json(
     {
-      success: false,
+      success: false as const,
       message,
       details,
       meta: buildMeta(c),

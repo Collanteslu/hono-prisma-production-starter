@@ -2,117 +2,70 @@
  * @file users.ts
  * @description User account management routes including CRUD operations, pagination,
  * real-time account blocking, and bulk session revocation.
+ * Password hashes never leave the database layer (omitted globally in the Prisma client).
  */
 
-import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import { prisma } from "../db.js";
 import type { UserWhereInput } from "../generated/client/models.js";
-
 import { recordAudit } from "../lib/audit.js";
 import { parseFilters, parseSorting } from "../lib/query.js";
 import { parseIncludes } from "../lib/relations.js";
-import { successResponse } from "../lib/response.js";
+import { buildPagination, errorResponse, successResponse } from "../lib/response.js";
+import { validate } from "../lib/validator.js";
+import { requireAdmin } from "../middleware/auth.js";
 import {
   blockUserSchema,
   createUserSchema,
   updateUserSchema,
   userQuerySchema,
 } from "../schemas/index.js";
-import type { AppEnv, PaginationMeta } from "../types/index.js";
+import { revokeUserSessions, userSessionRevocationOps } from "../services/sessions.js";
+import type { AppEnv } from "../types/index.js";
 import { hashPassword } from "../utils/password.js";
 
 export const userRoutes = new Hono<AppEnv>();
 
+const USER_INCLUDES = {
+  tasks: true,
+  sessions: true,
+} as const;
+
 /**
- * Sanitizes user entity by removing sensitive fields (password hash) before client serialization.
+ * Returns true when the given user is the only remaining active administrator.
+ * Used to prevent locking everyone out of the admin API.
  */
-function sanitizeUser(user: {
-  id: string;
-  name: string;
-  email: string;
-  role: string;
-  isBlocked: boolean;
-  blockedReason?: string | null;
-  deletedAt?: Date | null;
-  createdAt: Date;
-  tasks?: Array<{
-    id: string;
-    title: string;
-    description: string;
-    completed: boolean;
-    deletedAt?: Date | null;
-    createdAt: Date;
-  }>;
-  sessions?: Array<{
-    id: string;
-    userAgent: string | null;
-    ipAddress: string | null;
-    isActive: boolean;
-    expiresAt: Date;
-    createdAt: Date;
-  }>;
-}) {
-  return {
-    id: user.id,
-    name: user.name,
-    email: user.email,
-    role: user.role,
-    isBlocked: user.isBlocked,
-    blockedReason: user.blockedReason,
-    deletedAt: user.deletedAt ? user.deletedAt.toISOString() : null,
-    createdAt: user.createdAt.toISOString(),
-    ...(user.tasks && {
-      tasks: user.tasks.map((t) => ({
-        ...t,
-        createdAt: t.createdAt.toISOString(),
-      })),
-    }),
-    ...(user.sessions && {
-      sessions: user.sessions.map((s) => ({
-        ...s,
-        createdAt: s.createdAt.toISOString(),
-        expiresAt: s.expiresAt.toISOString(),
-      })),
-    }),
-  };
+async function isLastActiveAdmin(user: { id: string; role: string }) {
+  if (user.role !== "admin") return false;
+  const otherActiveAdmins = await prisma.user.count({
+    where: { role: "admin", isBlocked: false, deletedAt: null, id: { not: user.id } },
+  });
+  return otherActiveAdmins === 0;
 }
 
 /**
  * GET /api/users
- * Returns a paginated list of users with search and filtering capabilities.
+ * Returns a paginated list of users with search and filtering capabilities (Admin only).
  */
 userRoutes.get(
   "/",
-  zValidator("query", userQuerySchema, (result, c) => {
-    if (!result.success) {
-      return c.json(
-        {
-          success: false,
-          message: "Invalid query parameters for users list",
-          errors: result.error.flatten().fieldErrors,
-        },
-        400,
-      );
-    }
-  }),
+  requireAdmin,
+  validate("query", userQuerySchema, "Invalid query parameters for users list"),
   async (c) => {
-    const currentUser = c.get("user");
-    if (currentUser.role !== "admin") {
-      return c.json(
-        {
-          success: false,
-          message: "Forbidden: Only administrators can list all users.",
-        },
-        403,
-      );
-    }
-
     const { page, limit, search, role, isBlocked, sortBy, order, sort, includeDeleted } =
       c.req.valid("query");
     const skip = (page - 1) * limit;
 
-    const where: UserWhereInput = {};
+    // Apply generic filter[...] parameters
+    const where: UserWhereInput = parseFilters(c.req.query(), {
+      allowedFields: {
+        name: "string",
+        email: "string",
+        role: "string",
+        isBlocked: "boolean",
+        createdAt: "date",
+      },
+    });
 
     // Soft delete filter: Exclude soft-deleted users unless requested
     if (includeDeleted !== "true") {
@@ -131,21 +84,12 @@ userRoutes.get(
       where.OR = [{ name: { contains: search } }, { email: { contains: search } }];
     }
 
-    // Apply generic filter[...] parameters
-    const dynamicFilters = parseFilters(c.req.query(), {
-      allowedFields: ["name", "email", "role", "isBlocked"],
-    });
-    Object.assign(where, dynamicFilters);
-
     // Apply sorting (prioritize ?sort=-field if provided, fallback to sortBy & order)
     const orderBy = sort
       ? parseSorting(sort, { allowedFields: ["createdAt", "name", "email", "role"] })
       : { [sortBy]: order };
 
-    const include = parseIncludes(c.req.query("include"), {
-      tasks: true,
-      sessions: true,
-    });
+    const include = parseIncludes(c.req.query("include"), USER_INCLUDES);
 
     const [total, users] = await Promise.all([
       prisma.user.count({ where }),
@@ -158,120 +102,71 @@ userRoutes.get(
       }),
     ]);
 
-    const totalPages = Math.ceil(total / limit) || 1;
-    const pagination: PaginationMeta = {
-      total,
-      page,
-      limit,
-      totalPages,
-      hasNextPage: page < totalPages,
-      hasPrevPage: page > 1,
-    };
-
-    return successResponse(c, users.map(sanitizeUser), { pagination });
+    return successResponse(c, users, { pagination: buildPagination(total, page, limit) });
   },
 );
 
 /**
  * GET /api/users/:id
- * Fetches user profile details by ID.
+ * Fetches user profile details by ID (Admin or the user themselves).
  */
 userRoutes.get("/:id", async (c) => {
   const id = c.req.param("id");
   const currentUser = c.get("user");
 
-  // Authorization check: Only administrators or the user themselves can inspect the profile
   if (currentUser.role !== "admin" && currentUser.userId !== id) {
-    return c.json(
-      {
-        success: false,
-        message: "Forbidden: You do not have permission to view this user profile.",
-      },
+    return errorResponse(
+      c,
+      "Forbidden: You do not have permission to view this user profile.",
       403,
     );
   }
 
-  const include = parseIncludes(c.req.query("include"), {
-    tasks: true,
-    sessions: true,
-  });
-
   const user = await prisma.user.findUnique({
     where: { id },
-    include,
+    include: parseIncludes(c.req.query("include"), USER_INCLUDES),
   });
 
   if (!user) {
-    return c.json(
-      {
-        success: false,
-        message: `User with ID '${id}' not found.`,
-      },
-      404,
-    );
+    return errorResponse(c, `User with ID '${id}' not found.`, 404);
   }
 
-  return successResponse(c, sanitizeUser(user));
+  return successResponse(c, user);
 });
 
 /**
  * POST /api/users
- * Creates a new user with bcrypt-hashed credentials.
+ * Creates a new user with bcrypt-hashed credentials (Admin only).
+ * Public self-service sign-up is available at POST /api/auth/register.
  */
 userRoutes.post(
   "/",
-  zValidator("json", createUserSchema, (result, c) => {
-    if (!result.success) {
-      return c.json(
-        {
-          success: false,
-          message: "Validation error when creating user",
-          errors: result.error.flatten().fieldErrors,
-        },
-        400,
-      );
-    }
-  }),
+  requireAdmin,
+  validate("json", createUserSchema, "Validation error when creating user"),
   async (c) => {
     const { name, email, password, role } = c.req.valid("json");
 
-    const existing = await prisma.user.findUnique({
-      where: { email: email.toLowerCase() },
-    });
-
+    const existing = await prisma.user.findUnique({ where: { email }, select: { id: true } });
     if (existing) {
-      return c.json(
-        {
-          success: false,
-          message: `Email '${email}' is already registered.`,
-        },
-        409,
-      );
+      return errorResponse(c, `Email '${email}' is already registered.`, 409);
     }
 
-    const currentUser = c.get("user");
-    const finalRole: "admin" | "user" =
-      role === "admin" && currentUser?.role === "admin" ? "admin" : "user";
-
-    const hashedPassword = await hashPassword(password);
-
     const newUser = await prisma.user.create({
-      data: {
-        name,
-        email: email.toLowerCase(),
-        password: hashedPassword,
-        role: finalRole,
-      },
+      data: { name, email, password: await hashPassword(password), role },
     });
 
-    return c.json(
-      {
-        success: true,
-        message: "User created successfully with hashed credentials.",
-        data: sanitizeUser(newUser),
-      },
-      201,
-    );
+    await recordAudit(c, {
+      userId: c.get("user").userId,
+      action: "CREATE",
+      entity: "User",
+      entityId: newUser.id,
+      details: { email, role },
+    });
+
+    return successResponse(c, newUser, {
+      status: 201,
+      message: "User created successfully with hashed credentials.",
+    });
   },
 );
 
@@ -282,59 +177,33 @@ userRoutes.post(
  */
 userRoutes.patch(
   "/:id/block",
-  zValidator("json", blockUserSchema, (result, c) => {
-    if (!result.success) {
-      return c.json(
-        {
-          success: false,
-          message: "Validation error in block user payload",
-          errors: result.error.flatten().fieldErrors,
-        },
-        400,
-      );
-    }
-  }),
+  requireAdmin,
+  validate("json", blockUserSchema, "Validation error in block user payload"),
   async (c) => {
     const id = c.req.param("id");
     const currentUser = c.get("user");
 
-    if (currentUser.role !== "admin") {
-      return c.json(
-        {
-          success: false,
-          message: "Access denied: Only administrators can suspend or reactivate users.",
-        },
-        403,
-      );
-    }
-
     if (currentUser.userId === id) {
-      return c.json(
-        {
-          success: false,
-          message: "Invalid action: Administrators cannot suspend their own account.",
-        },
+      return errorResponse(
+        c,
+        "Invalid action: Administrators cannot suspend their own account.",
         400,
       );
     }
 
-    const targetUser = await prisma.user.findUnique({
-      where: { id },
-    });
+    const targetUser = await prisma.user.findUnique({ where: { id } });
 
     if (!targetUser) {
-      return c.json(
-        {
-          success: false,
-          message: `User with ID '${id}' not found.`,
-        },
-        404,
-      );
+      return errorResponse(c, `User with ID '${id}' not found.`, 404);
     }
 
     const { isBlocked, reason } = c.req.valid("json");
 
-    const updatedUser = await prisma.user.update({
+    if (!isBlocked && targetUser.deletedAt) {
+      return errorResponse(c, "Invalid action: Deleted accounts cannot be reactivated.", 409);
+    }
+
+    const update = prisma.user.update({
       where: { id },
       data: {
         isBlocked,
@@ -342,26 +211,24 @@ userRoutes.patch(
       },
     });
 
-    // Terminate all active sessions immediately upon suspension
-    let revokedSessionsCount = 0;
-    if (isBlocked) {
-      const res = await prisma.session.updateMany({
-        where: { userId: id, isActive: true },
-        data: { isActive: false },
-      });
-      revokedSessionsCount = res.count;
+    // Terminate all active sessions immediately upon suspension (atomically with the block)
+    const [updatedUser, revokedSessions] = isBlocked
+      ? await prisma.$transaction([update, ...userSessionRevocationOps(id)])
+      : [await update, { count: 0 }];
+    const revokedSessionsCount = revokedSessions.count;
 
-      await prisma.refreshToken.deleteMany({
-        where: { userId: id },
-      });
-    }
+    await recordAudit(c, {
+      userId: currentUser.userId,
+      action: isBlocked ? "BLOCK" : "UNBLOCK",
+      entity: "User",
+      entityId: id,
+      details: { reason: updatedUser.blockedReason, revokedSessionsCount },
+    });
 
-    return c.json({
-      success: true,
+    return successResponse(c, updatedUser, {
       message: isBlocked
         ? `User '${updatedUser.name}' has been suspended and ${revokedSessionsCount} active session(s) terminated.`
         : `User '${updatedUser.name}' has been reactivated successfully.`,
-      data: sanitizeUser(updatedUser),
     });
   },
 );
@@ -375,118 +242,89 @@ userRoutes.post("/:id/revoke-sessions", async (c) => {
   const currentUser = c.get("user");
 
   if (currentUser.userId !== id && currentUser.role !== "admin") {
-    return c.json(
-      {
-        success: false,
-        message:
-          "Access denied: You can only revoke your own sessions unless you are an administrator.",
-      },
+    return errorResponse(
+      c,
+      "Access denied: You can only revoke your own sessions unless you are an administrator.",
       403,
     );
   }
 
-  const res = await prisma.session.updateMany({
-    where: { userId: id, isActive: true },
-    data: { isActive: false },
+  const revokedCount = await revokeUserSessions(id);
+
+  await recordAudit(c, {
+    userId: currentUser.userId,
+    action: "REVOKE_ALL_SESSIONS",
+    entity: "User",
+    entityId: id,
+    details: { revokedCount },
   });
 
-  await prisma.refreshToken.deleteMany({
-    where: { userId: id },
-  });
-
-  return c.json({
-    success: true,
-    message: `Revoked ${res.count} active session(s) for user.`,
+  return successResponse(c, null, {
+    message: `Revoked ${revokedCount} active session(s) for user.`,
   });
 });
 
 /**
  * PUT /api/users/:id
- * Updates user profile information.
+ * Updates user profile information (Admin or the user themselves).
+ * Changing the password revokes every other session of the account.
  */
 userRoutes.put(
   "/:id",
-  zValidator("json", updateUserSchema, (result, c) => {
-    if (!result.success) {
-      return c.json(
-        {
-          success: false,
-          message: "Validation error when updating user",
-          errors: result.error.flatten().fieldErrors,
-        },
-        400,
-      );
-    }
-  }),
+  validate("json", updateUserSchema, "Validation error when updating user"),
   async (c) => {
     const id = c.req.param("id");
     const currentUser = c.get("user");
 
-    // Ownership & Role Verification: User must be modifying their own profile OR have admin role
     if (currentUser.role !== "admin" && currentUser.userId !== id) {
-      return c.json(
-        {
-          success: false,
-          message: "Forbidden: You do not have permission to modify another user's profile.",
-        },
+      return errorResponse(
+        c,
+        "Forbidden: You do not have permission to modify another user's profile.",
         403,
       );
     }
 
-    const existingUser = await prisma.user.findUnique({
-      where: { id },
-    });
+    const existingUser = await prisma.user.findUnique({ where: { id } });
 
-    if (!existingUser) {
-      return c.json(
-        {
-          success: false,
-          message: `User with ID '${id}' not found.`,
-        },
-        404,
-      );
+    if (!existingUser || existingUser.deletedAt) {
+      return errorResponse(c, `User with ID '${id}' not found.`, 404);
     }
 
-    const { name, email, password } = c.req.valid("json");
+    const changes = c.req.valid("json");
+    const { name, email, password } = changes;
 
-    if (email && email.toLowerCase() !== existingUser.email) {
-      const emailTaken = await prisma.user.findUnique({
-        where: { email: email.toLowerCase() },
-      });
+    if (email && email !== existingUser.email) {
+      const emailTaken = await prisma.user.findUnique({ where: { email }, select: { id: true } });
       if (emailTaken) {
-        return c.json(
-          {
-            success: false,
-            message: `Email '${email}' is already in use by another account.`,
-          },
-          409,
-        );
+        return errorResponse(c, `Email '${email}' is already in use by another account.`, 409);
       }
-    }
-
-    let hashedPasswordUpdate: string | undefined;
-    if (password) {
-      hashedPasswordUpdate = await hashPassword(password);
     }
 
     const updatedUser = await prisma.user.update({
       where: { id },
       data: {
         ...(name && { name }),
-        ...(email && { email: email.toLowerCase() }),
-        ...(hashedPasswordUpdate && { password: hashedPasswordUpdate }),
+        ...(email && { email }),
+        ...(password && { password: await hashPassword(password) }),
       },
     });
 
+    // A password change invalidates every other session (keep the caller's own session alive)
+    const revokedSessionsCount = password
+      ? await revokeUserSessions(id, {
+          exceptSessionId: currentUser.userId === id ? currentUser.sessionId : undefined,
+        })
+      : 0;
+
     await recordAudit(c, {
       userId: currentUser.userId,
-      action: "UPDATE",
+      action: password ? "PASSWORD_CHANGE" : "UPDATE",
       entity: "User",
       entityId: id,
-      details: { updatedFields: Object.keys(c.req.valid("json")) },
+      details: { updatedFields: Object.keys(changes), revokedSessionsCount },
     });
 
-    return successResponse(c, sanitizeUser(updatedUser), {
+    return successResponse(c, updatedUser, {
       message: "User profile updated successfully.",
     });
   },
@@ -494,78 +332,69 @@ userRoutes.put(
 
 /**
  * DELETE /api/users/:id
- * Deletes a user account with cascading deletion across tasks and sessions.
- * Security: Only admins or the account owner can delete an account.
+ * Soft deletes a user account (revoking all sessions), or permanently deletes it with
+ * cascading deletion across tasks and sessions when ?permanent=true.
+ * Security: Only admins or the account owner can delete an account, and the last
+ * active administrator can never be deleted.
  */
 userRoutes.delete("/:id", async (c) => {
   const id = c.req.param("id");
   const isPermanent = c.req.query("permanent") === "true";
   const currentUser = c.get("user");
 
-  // Ownership & Role Verification: User must be deleting their own account OR have admin role
   if (currentUser.role !== "admin" && currentUser.userId !== id) {
-    return c.json(
-      {
-        success: false,
-        message: "Forbidden: You do not have permission to delete another user's account.",
-      },
+    return errorResponse(
+      c,
+      "Forbidden: You do not have permission to delete another user's account.",
       403,
     );
   }
 
-  const existingUser = await prisma.user.findUnique({
-    where: { id },
-  });
+  const existingUser = await prisma.user.findUnique({ where: { id } });
 
-  if (!existingUser) {
-    return c.json(
-      {
-        success: false,
-        message: `User with ID '${id}' not found.`,
-      },
-      404,
-    );
+  if (!existingUser || (existingUser.deletedAt && !isPermanent)) {
+    return errorResponse(c, `User with ID '${id}' not found.`, 404);
+  }
+
+  if (!existingUser.deletedAt && (await isLastActiveAdmin(existingUser))) {
+    return errorResponse(c, "Invalid action: Cannot delete the last active administrator.", 409);
   }
 
   if (isPermanent) {
     const tasksCount = await prisma.task.count({ where: { userId: id } });
 
-    await prisma.user.delete({
-      where: { id },
-    });
+    await prisma.user.delete({ where: { id } });
 
     await recordAudit(c, {
-      userId: currentUser?.userId || null,
+      userId: currentUser.userId === id ? null : currentUser.userId,
       action: "DELETE_PERMANENT",
       entity: "User",
       entityId: id,
+      details: { email: existingUser.email },
     });
 
-    return successResponse(c, sanitizeUser(existingUser), {
+    return successResponse(c, existingUser, {
       message: `User '${existingUser.name}' and ${tasksCount} associated task(s) permanently deleted.`,
     });
   }
 
-  // Soft delete user and revoke all active sessions
-  const [softDeletedUser] = await Promise.all([
+  // Soft delete user and revoke all active sessions and refresh tokens
+  const [softDeletedUser] = await prisma.$transaction([
     prisma.user.update({
       where: { id },
       data: { deletedAt: new Date(), isBlocked: true, blockedReason: "Account deleted" },
     }),
-    prisma.session.updateMany({
-      where: { userId: id, isActive: true },
-      data: { isActive: false },
-    }),
+    ...userSessionRevocationOps(id),
   ]);
 
   await recordAudit(c, {
-    userId: currentUser?.userId || null,
+    userId: currentUser.userId,
     action: "SOFT_DELETE",
     entity: "User",
     entityId: id,
   });
 
-  return successResponse(c, sanitizeUser(softDeletedUser), {
+  return successResponse(c, softDeletedUser, {
     message: `User '${existingUser.name}' soft-deleted and all sessions revoked.`,
   });
 });

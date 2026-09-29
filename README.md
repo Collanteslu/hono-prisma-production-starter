@@ -104,10 +104,11 @@ hono-prisma-production-starter/
 git clone https://github.com/your-username/your-repo-name.git
 cd your-repo-name
 
-# 2. Install dependencies & initialize SQLite database
+# 2. Install dependencies & initialize SQLite database (versioned migrations)
 npm install
+cp .env.example .env   # then set strong JWT secrets: openssl rand -base64 48
 npx prisma generate
-npx prisma db push
+npx prisma migrate deploy
 
 # 3. Start development server with hot-reload
 npm run dev
@@ -120,6 +121,20 @@ http://localhost:3011
 ```
 
 *(On first startup, default demo accounts and tasks are automatically seeded into SQLite with bcrypt-hashed passwords).*
+
+### Database migrations
+
+Schema changes are tracked in [`prisma/migrations`](prisma/migrations) (never use `db push` against real data):
+
+```bash
+# After editing prisma/schema.prisma, create and apply a new migration locally
+npm run db:migrate -- --name describe_your_change
+
+# Apply pending migrations (CI / production — the Docker entrypoint does this automatically)
+npm run db:deploy
+```
+
+> **Upgrading an existing database created with `db push`?** The Docker entrypoint detects it (Prisma error `P3005`), marks `0_init` as applied and deploys the remaining migrations. Manually: `npx prisma migrate resolve --applied 0_init && npx prisma migrate deploy`. The `hash_refresh_tokens_and_indexes` migration discards stored refresh tokens, so clients must sign in again once.
 
 ---
 
@@ -177,11 +192,11 @@ sequenceDiagram
     Client->>Hono: POST /api/auth/login { email, password }
     Hono->>SQLite: Verify credentials (bcrypt) & create Session
     SQLite-->>Hono: Session created (ID, UserAgent, IP)
-    Hono-->>Client: Returns Access Token (15m) + Refresh Token (7d)
+    Hono-->>Client: Returns Access Token (15m) + Refresh Token (7d, stored only as SHA-256 hash)
 
     Client->>Hono: GET /api/tasks (Bearer Access Token)
     Hono->>Hono: Verify JWT signature & expiration
-    Hono->>SQLite: Check user.isBlocked === false AND session.isActive === true
+    Hono->>SQLite: Check user is active (role read from DB) AND session.isActive === true
     alt User is blocked OR session is inactive
         SQLite-->>Hono: Rejected (Blocked: 403 / Inactive: 401)
         Hono-->>Client: Immediate Access Denied (Real-Time Revocation)
@@ -192,6 +207,17 @@ sequenceDiagram
         Hono-->>Client: 200 OK (Paginated tasks)
     end
 ```
+
+### Security guarantees
+
+- **Refresh token rotation with reuse detection**: each refresh token can be exchanged exactly once (atomic claim). Replaying a rotated token within `REFRESH_REUSE_GRACE_SECONDS` (default 10s) returns `409` (benign concurrent refresh); after that it is treated as theft and the whole session is revoked.
+- **Hashed refresh tokens**: only SHA-256 digests are persisted, so a database leak does not expose usable tokens.
+- **Real-time authorization**: blocking, soft-deleting, role changes and session revocation take effect on the very next request (role is read from the database, not from the JWT).
+- **Brute-force protection**: per-IP rate limits on `/login`, `/refresh` and `/register`, plus a per-account lockout after 5 failed logins (15 min). Limits are in-memory (per instance).
+- **Trusted client IP**: `X-Forwarded-For` / `CF-Connecting-IP` are only honoured when `TRUST_PROXY=true` (sessions, audit log and rate limiting).
+- **Password policy**: 8–72 characters (bcrypt cost 12). Changing a password revokes every other session of the account.
+- **Admin safety**: the last active administrator cannot delete their account; deleted accounts cannot be reactivated.
+- **Audit trail**: logins (successful and failed), logout, registration, user creation, block/unblock, password changes, session revocations, token reuse and task changes.
 
 ### Pre-seeded Demo Credentials
 
@@ -259,7 +285,7 @@ Following API conventions (JSON:API, RFC 7807), responses include telemetry meta
     "requestId": "e15822e1-4560-4416-836b-67a6d80ff0a9",
     "timestamp": "2026-09-29T20:00:00.000Z",
     "durationMs": 4.12,
-    "apiVersion": "1.1.0"
+    "apiVersion": "1.2.0"
   }
 }
 ```
@@ -277,14 +303,15 @@ Following API conventions (JSON:API, RFC 7807), responses include telemetry meta
 | Method | Endpoint | Description | Auth |
 |---|---|---|---|
 | `GET` | `/healthz` | Uptime check & active SQLite query latency in ms | No |
-| `GET` | `/docs` | Interactive Scalar OpenAPI web documentation | No |
-| `GET` | `/openapi.json` | Raw OpenAPI 3.0 schema | No |
+| `GET` | `/docs` | Interactive Scalar OpenAPI web documentation (disabled in production unless `ENABLE_DOCS=true`) | No |
+| `GET` | `/openapi.json` | Raw OpenAPI 3.0 schema (same toggle as `/docs`) | No |
 
 ### Authentication (`/api/auth`)
 | Method | Endpoint | Description | Rate Limit |
 |---|---|---|---|
-| `POST` | `/api/auth/login` | Authenticate, create database session, issue tokens | 30 req/min |
-| `POST` | `/api/auth/refresh` | Renew token pair with **Token Rotation** | No |
+| `POST` | `/api/auth/register` | Public sign-up (always `user` role) | 5 req/hour |
+| `POST` | `/api/auth/login` | Authenticate, create database session, issue tokens (account lockout after 5 failures) | 10 req/min |
+| `POST` | `/api/auth/refresh` | Renew token pair with **Token Rotation** (`409` on concurrent refresh) | 30 req/min |
 | `POST` | `/api/auth/logout` | Deactivate session and revoke refresh tokens | No |
 
 
@@ -301,27 +328,30 @@ Following API conventions (JSON:API, RFC 7807), responses include telemetry meta
 | Method | Endpoint | Description | Auth |
 |---|---|---|---|
 | `GET` | `/api/tasks` | Paginated list (`?page=1&limit=10&search=text&completed=true&include=user&includeDeleted=true&sort=-createdAt,title&filter[completed]=true`) | Bearer |
-| `GET` | `/api/tasks/:id` | Get single task (`?include=user`, 403 if belonging to another user) | Bearer |
+| `GET` | `/api/tasks/:id` | Get single task (`?include=user`, `?includeDeleted=true` for soft-deleted, 403 if belonging to another user) | Bearer |
 | `POST` | `/api/tasks` | Create task (automatically assigned to token's userId, generates AuditLog) | Bearer |
 | `PUT` | `/api/tasks/:id` | Update title, description, or completed state (generates AuditLog) | Bearer |
 | `DELETE` | `/api/tasks/:id` | **Soft-delete** task (`deletedAt: now()`). Add `?permanent=true` for physical delete | Bearer |
+| `POST` | `/api/tasks/:id/restore` | Restore a soft-deleted task | Bearer |
 
 ### Users (`/api/users`)
 | Method | Endpoint | Description | Auth |
 |---|---|---|---|
 | `GET` | `/api/users` | Paginated users list (`?page=1&limit=10&search=ana&role=user&include=tasks,sessions&includeDeleted=true&sort=-createdAt,name&filter[role]=user`) | Admin |
 | `GET` | `/api/users/:id` | Get user details (`?include=tasks,sessions`) | Bearer |
-| `POST` | `/api/users` | Create user with bcrypt-hashed credentials | Bearer |
-| `PUT` | `/api/users/:id` | Update own user profile (or any profile if Admin) | Bearer |
+| `POST` | `/api/users` | Create user with any role (public sign-up lives at `/api/auth/register`) | Admin |
+| `PUT` | `/api/users/:id` | Update own user profile (or any profile if Admin). A password change revokes other sessions | Bearer |
 | `PATCH` | `/api/users/:id/block` | **Suspend / Reactivate User** *(Admin only)*: Immediately revokes all active sessions | Admin |
-| `POST` | `/api/users/:id/revoke-sessions` | Terminate all active sessions for a target user | Admin |
+| `POST` | `/api/users/:id/revoke-sessions` | Terminate all active sessions for a target user (self or Admin) | Bearer |
 | `DELETE` | `/api/users/:id` | Delete own account (or any if Admin). **Soft-delete** by default, `?permanent=true` for cascade | Bearer |
 
 
 ### Audit & Security Logs (`/api/audit-logs`)
 | Method | Endpoint | Description | Auth |
 |---|---|---|---|
-| `GET` | `/api/audit-logs` | Query audit trail (`?page=1&limit=20&entity=Task&action=SOFT_DELETE`) | Admin |
+| `GET` | `/api/audit-logs` | Query audit trail (`?page=1&limit=20&entity=Task&action=SOFT_DELETE&userId=...`) | Admin |
+
+> **Filters** (`filter[field]` / `filter[field][op]`) are typed per field: booleans accept `eq`, strings `eq|contains|in`, dates `eq|gte|lte`. Invalid operators or values return `400`.
 
 
 ---
@@ -329,11 +359,14 @@ Following API conventions (JSON:API, RFC 7807), responses include telemetry meta
 ## 🧪 Automated Testing & Code Quality
 
 ### 1. In-Memory Native Tests (Vitest)
-Executes high-speed TypeScript unit and integration tests using Hono's in-memory `app.request()` without needing an external HTTP listener:
+Executes high-speed TypeScript unit and integration tests using Hono's in-memory `app.request()` without needing an external HTTP listener. Each run creates, migrates and deletes its own temporary SQLite database, so your `dev.db` is never touched:
 
 ```bash
 # Run all tests once
 npm test
+
+# Run tests with V8 coverage report
+npm run test:coverage
 
 # Run tests in interactive watch mode
 npm run test:watch
@@ -369,14 +402,22 @@ npm run lint:fix
 - [x] Admin account suspension (instant 403 on existing tokens & login block)
 - [x] Account reactivation
 - [x] Task ownership enforcement, pagination, text search, and filters
+- [x] Concurrent refresh handling, hashed refresh tokens, and account lockout
+- [x] Typed filters (400 on invalid input), malformed JSON handling, multi-field sorting
+- [x] Admin-only user creation, public registration, last-admin protection, password-change session revocation
+- [x] Soft-deleted task visibility and restore
 
 ---
 
 ## 🐳 Docker Deployment
 
-The template includes an optimized multi-stage `Dockerfile` (Alpine-based, non-root user) and `docker-compose.yml`:
+The template includes an optimized multi-stage `Dockerfile` (Alpine-based, non-root user, `HEALTHCHECK` on `/healthz`) and `docker-compose.yml`. Secrets are **never** committed: Compose refuses to start unless `JWT_SECRET` and `JWT_REFRESH_SECRET` are provided via the environment or a local `.env` file:
 
 ```bash
+# Provide secrets (e.g. in .env next to docker-compose.yml)
+echo "JWT_SECRET=$(openssl rand -base64 48)" >> .env
+echo "JWT_REFRESH_SECRET=$(openssl rand -base64 48)" >> .env
+
 # Build and start container in detached mode
 docker compose up -d
 
@@ -387,7 +428,19 @@ docker compose logs -f
 docker compose down
 ```
 
-The named volume `sqlite_data` persists your SQLite database across container restarts.
+The named volume `sqlite_data` persists your SQLite database across container restarts. On startup the entrypoint runs `prisma migrate deploy`.
+
+| Variable | Default | Description |
+|---|---|---|
+| `JWT_SECRET` / `JWT_REFRESH_SECRET` | — (required) | HS256 signing secrets (min 16 chars, 32+ recommended) |
+| `DATABASE_URL` | `file:./dev.db` | SQLite file (or `TURSO_DATABASE_URL` + `TURSO_AUTH_TOKEN`) |
+| `TRUST_PROXY` | `false` | Trust `X-Forwarded-For` / `CF-Connecting-IP` for client IPs |
+| `CORS_ORIGINS` | `*` | Comma-separated allowed origins |
+| `ENABLE_DOCS` | `true` outside production | Expose `/docs` and `/openapi.json` |
+| `LOGIN_RATE_LIMIT_MAX` / `REFRESH_RATE_LIMIT_MAX` / `REGISTER_RATE_LIMIT_MAX` | `10` / `30` / `5` | Per-IP limits (per minute; register per hour) |
+| `REFRESH_REUSE_GRACE_SECONDS` | `10` | Concurrent refresh window before reuse is treated as theft |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | — | Bootstrap the first admin in production on an empty database |
+| `LOG_LEVEL` | `info` (prod) / `debug` | Pino log level |
 
 ---
 

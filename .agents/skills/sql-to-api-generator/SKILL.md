@@ -31,10 +31,9 @@ When given a SQL file (e.g. `schema.sql` or inline `CREATE TABLE` statements):
    - `DATETIME` -> `DateTime @default(now())`
    - `FOREIGN KEY (userId) REFERENCES User(id)` -> Relational relation decorators (`@relation(fields: [userId], references: [id], onDelete: Cascade)`).
 
-### Step 2: Generate Client & Push Migrations
+### Step 2: Create the Migration & Generate Client
 ```bash
-npx prisma generate
-npx prisma db push
+npx prisma migrate dev --name add_<model>
 ```
 
 ### Step 3: Scaffold Zod Validation Schemas (`src/schemas/index.ts`)

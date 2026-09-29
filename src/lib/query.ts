@@ -4,8 +4,13 @@
  * Provides type-safe filtering with allowed fields, comparison operators, and directional sorting.
  */
 
+import { HTTPException } from "hono/http-exception";
+
+export type FilterFieldType = "string" | "boolean" | "number" | "date";
+
 export interface FilterOptions {
-  allowedFields: string[];
+  /** Whitelisted filterable fields mapped to their column type */
+  allowedFields: Record<string, FilterFieldType>;
 }
 
 export interface SortOptions {
@@ -14,15 +19,60 @@ export interface SortOptions {
   defaultOrder?: "asc" | "desc";
 }
 
+/** Operators accepted for each field type */
+const OPERATORS: Record<FilterFieldType, readonly string[]> = {
+  string: ["eq", "contains", "in"],
+  boolean: ["eq"],
+  number: ["eq", "gte", "lte", "in"],
+  date: ["eq", "gte", "lte"],
+};
+
+function invalidFilter(message: string): never {
+  throw new HTTPException(400, { message: `Invalid filter: ${message}` });
+}
+
+/**
+ * Converts a raw query string value to the field's type, rejecting malformed values with HTTP 400.
+ */
+function coerceValue(
+  field: string,
+  type: FilterFieldType,
+  raw: string,
+): string | number | boolean | Date {
+  switch (type) {
+    case "boolean":
+      if (raw === "true") return true;
+      if (raw === "false") return false;
+      return invalidFilter(`'${field}' expects true or false`);
+    case "number": {
+      const num = Number(raw);
+      if (raw.trim() === "" || Number.isNaN(num)) {
+        return invalidFilter(`'${field}' expects a number`);
+      }
+      return num;
+    }
+    case "date": {
+      const date = new Date(raw);
+      if (Number.isNaN(date.getTime())) {
+        return invalidFilter(`'${field}' expects an ISO 8601 date`);
+      }
+      return date;
+    }
+    default:
+      return raw;
+  }
+}
+
 /**
  * Parses raw query parameters for filtering:
  * Supports:
- * - filter[field]=value (exact match or boolean conversion)
+ * - filter[field]=value (exact match, typed by the field definition)
  * - filter[field][eq]=value
- * - filter[field][contains]=value
- * - filter[field][gte]=value
- * - filter[field][lte]=value
- * - filter[field][in]=val1,val2
+ * - filter[field][contains]=value (strings)
+ * - filter[field][gte]=value / filter[field][lte]=value (numbers, dates)
+ * - filter[field][in]=val1,val2 (strings, numbers)
+ *
+ * Unknown fields are ignored; invalid operators or values throw HTTP 400.
  */
 export function parseFilters(
   query: Record<string, string | undefined>,
@@ -37,21 +87,20 @@ export function parseFilters(
     const match = key.match(/^filter\[([a-zA-Z0-9_]+)\](?:\[([a-zA-Z0-9_]+)\])?$/);
     if (!match) continue;
 
-    const [, field, operator] = match;
-    if (!options.allowedFields.includes(field)) continue;
+    const [, field, operator = "eq"] = match;
+    if (!Object.hasOwn(options.allowedFields, field)) continue;
 
-    if (!operator || operator === "eq") {
-      if (val === "true") where[field] = true;
-      else if (val === "false") where[field] = false;
-      else where[field] = val;
-    } else if (operator === "contains") {
-      where[field] = { contains: val };
-    } else if (operator === "gte") {
-      where[field] = { gte: Number.isNaN(Number(val)) ? val : Number(val) };
-    } else if (operator === "lte") {
-      where[field] = { lte: Number.isNaN(Number(val)) ? val : Number(val) };
+    const type = options.allowedFields[field];
+    if (!OPERATORS[type].includes(operator)) {
+      invalidFilter(`operator '${operator}' is not supported for '${field}'`);
+    }
+
+    if (operator === "eq") {
+      where[field] = coerceValue(field, type, val);
     } else if (operator === "in") {
-      where[field] = { in: val.split(",").map((s) => s.trim()) };
+      where[field] = { in: val.split(",").map((s) => coerceValue(field, type, s.trim())) };
+    } else {
+      where[field] = { [operator]: operator === "contains" ? val : coerceValue(field, type, val) };
     }
   }
 
@@ -59,34 +108,28 @@ export function parseFilters(
 }
 
 /**
- * Parses sort parameter, e.g. `sort=-createdAt,title`
+ * Parses sort parameter, e.g. `sort=-createdAt,title`.
+ * Returns an array because Prisma only accepts one field per orderBy object.
  */
 export function parseSorting(
   sortParam: string | undefined,
   options: SortOptions,
-): Record<string, "asc" | "desc"> {
+): Array<Record<string, "asc" | "desc">> {
   const defaultSort = options.defaultSort || "createdAt";
   const defaultOrder = options.defaultOrder || "desc";
 
-  if (!sortParam) {
-    return { [defaultSort]: defaultOrder };
-  }
+  const orderBy: Array<Record<string, "asc" | "desc">> = [];
+  const seen = new Set<string>();
 
-  const orderBy: Record<string, "asc" | "desc"> = {};
-  const parts = sortParam.split(",").map((p) => p.trim());
-
-  for (const part of parts) {
+  for (const part of (sortParam ?? "").split(",").map((p) => p.trim())) {
     const isDesc = part.startsWith("-");
     const field = isDesc ? part.slice(1) : part;
 
-    if (options.allowedFields.includes(field)) {
-      orderBy[field] = isDesc ? "desc" : "asc";
+    if (options.allowedFields.includes(field) && !seen.has(field)) {
+      seen.add(field);
+      orderBy.push({ [field]: isDesc ? "desc" : "asc" });
     }
   }
 
-  if (Object.keys(orderBy).length === 0) {
-    return { [defaultSort]: defaultOrder };
-  }
-
-  return orderBy;
+  return orderBy.length > 0 ? orderBy : [{ [defaultSort]: defaultOrder }];
 }

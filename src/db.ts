@@ -39,7 +39,8 @@ const adapter = new PrismaLibSql({
   authToken: env.TURSO_AUTH_TOKEN,
 });
 
-export const prisma = new PrismaClient({ adapter });
+// Password hashes are omitted from every query by default; opt in explicitly with `omit: { password: false }`.
+export const prisma = new PrismaClient({ adapter, omit: { user: { password: true } } });
 
 /**
  * Database seeder executed during application startup.

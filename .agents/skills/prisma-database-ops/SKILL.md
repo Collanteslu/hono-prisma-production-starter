@@ -38,11 +38,12 @@ Use this skill when modifying database models, relations, adding indexes, or tro
    }
    ```
 
-### 2. Pushing Schema Changes to SQLite
-Push schema changes and regenerate the type-safe client in one step:
+### 2. Creating a Migration for Schema Changes
+Create a versioned migration (committed under `prisma/migrations`) and regenerate the client:
 ```bash
-npx prisma db push && npx prisma generate
+npx prisma migrate dev --name describe_your_change
 ```
+Never use `prisma db push` against real data: production applies migrations with `npx prisma migrate deploy` (done automatically by `docker-entrypoint.sh`).
 
 ### 3. Visual Data Inspection (Prisma Studio)
 To visually inspect rows, view relations, or edit mock data:
@@ -54,7 +55,6 @@ Opens the GUI at `http://localhost:5555`.
 ### 4. Database Reset (Development only)
 If you need to reset the local database from scratch:
 ```bash
-rm -f dev.db dev.db-journal
-npx prisma db push
+npx prisma migrate reset
 # Restarting the app will trigger seedDatabase() automatically
 ```

@@ -26,8 +26,11 @@ jobs:
       - name: 🛠️ Generar Prisma Client
         run: npx prisma generate
 
-      - name: 🗄️ Crear esquema de base de datos para Tests
-        run: npx prisma db push
+      - name: 🛡️ Auditoría de dependencias de producción
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: 🗄️ Verificar que las migraciones coinciden con el schema
+        run: npx prisma migrate diff --from-migrations prisma/migrations --to-schema prisma/schema.prisma --exit-code
 
       - name: 🔎 Verificación de tipos TypeScript (Build)
         run: npm run build
@@ -35,9 +38,6 @@ jobs:
       - name: ⚡ Linting & Formatting Check (Biome)
         run: npm run lint
 
-      - name: 🧪 Ejecutar Tests Automatizados (Vitest)
-        run: npm test
-        env:
-          JWT_SECRET: "ci_jwt_secret_test_key_at_least_32_chars_long"
-          JWT_REFRESH_SECRET: "ci_jwt_refresh_secret_test_key_at_least_32_chars"
-          NODE_ENV: "test"
+      # Los tests crean y migran su propia base de datos SQLite temporal (ver vitest.config.ts)
+      - name: 🧪 Ejecutar Tests Automatizados con cobertura (Vitest)
+        run: npm run test:coverage

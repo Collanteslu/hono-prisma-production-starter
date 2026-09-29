@@ -1,10 +1,13 @@
 /**
  * @file cleanup.ts
- * @description Background garbage collection task that purges expired sessions and orphaned refresh tokens.
+ * @description Background garbage collection task that purges expired sessions and stale refresh tokens.
  * Keeps the SQLite database performant and prevents storage bloat.
  */
 
 import { prisma } from "../db.js";
+import { logger } from "../lib/logger.js";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Executes a cleanup cycle deleting expired sessions and tokens.
@@ -17,30 +20,33 @@ export async function cleanupExpiredSessions(): Promise<{
   try {
     const now = new Date();
 
-    const [sessionsRes, tokensRes] = await Promise.all([
+    const [sessionsRes, tokensRes] = await prisma.$transaction([
       // 1. Purge sessions that are either naturally expired or marked inactive for >24 hours
+      //    (refresh tokens of deleted sessions are removed by the ON DELETE CASCADE relation)
       prisma.session.deleteMany({
         where: {
           OR: [
             { expiresAt: { lt: now } },
             {
               isActive: false,
-              updatedAt: { lt: new Date(now.getTime() - 24 * 60 * 60 * 1000) },
+              updatedAt: { lt: new Date(now.getTime() - DAY_MS) },
             },
           ],
         },
       }),
-      // 2. Purge expired refresh tokens
+      // 2. Purge expired tokens and tokens rotated more than 24 hours ago. A replay of a purged
+      //    token is still detected as reuse because it no longer matches any stored hash.
       prisma.refreshToken.deleteMany({
         where: {
-          expiresAt: { lt: now },
+          OR: [{ expiresAt: { lt: now } }, { usedAt: { lt: new Date(now.getTime() - DAY_MS) } }],
         },
       }),
     ]);
 
     if (sessionsRes.count > 0 || tokensRes.count > 0) {
-      console.log(
-        `🧹 [Cleanup Routine] Purged ${sessionsRes.count} expired session(s) and ${tokensRes.count} token(s).`,
+      logger.info(
+        { deletedSessions: sessionsRes.count, deletedTokens: tokensRes.count },
+        "🧹 Cleanup routine purged expired sessions and tokens",
       );
     }
 
@@ -49,7 +55,7 @@ export async function cleanupExpiredSessions(): Promise<{
       deletedTokens: tokensRes.count,
     };
   } catch (error) {
-    console.error("❌ Error during session cleanup routine:", error);
+    logger.error({ err: error }, "❌ Error during session cleanup routine");
     return { deletedSessions: 0, deletedTokens: 0 };
   }
 }
@@ -60,11 +66,11 @@ export async function cleanupExpiredSessions(): Promise<{
  */
 export function startCleanupJob(intervalMs: number = 60 * 60 * 1000): NodeJS.Timeout {
   // Run an initial non-blocking cycle on startup
-  cleanupExpiredSessions();
+  void cleanupExpiredSessions();
 
   // Schedule recurring timer
   const timer = setInterval(() => {
-    cleanupExpiredSessions();
+    void cleanupExpiredSessions();
   }, intervalMs);
 
   // Unref timer so it does not keep the Node process alive during shutdown

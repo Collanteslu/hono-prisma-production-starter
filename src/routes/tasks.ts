@@ -5,20 +5,53 @@
  * Security Model:
  * Standard users can ONLY read, create, update, and delete tasks they own.
  * Any attempt to access a task belonging to another user results in HTTP 403 Forbidden.
+ * Soft-deleted tasks are hidden (404) except when explicitly requested or restored.
  */
 
-import { zValidator } from "@hono/zod-validator";
+import type { Context } from "hono";
 import { Hono } from "hono";
 import { prisma } from "../db.js";
 import type { TaskWhereInput } from "../generated/client/models.js";
 import { recordAudit } from "../lib/audit.js";
 import { parseFilters, parseSorting } from "../lib/query.js";
 import { parseIncludes } from "../lib/relations.js";
-import { successResponse } from "../lib/response.js";
+import { buildPagination, errorResponse, successResponse } from "../lib/response.js";
+import { validate } from "../lib/validator.js";
 import { createTaskSchema, taskQuerySchema, updateTaskSchema } from "../schemas/index.js";
-import type { AppEnv, PaginationMeta } from "../types/index.js";
+import type { AppEnv } from "../types/index.js";
 
 export const taskRoutes = new Hono<AppEnv>();
+
+const TASK_INCLUDES = {
+  user: { select: { id: true, name: true, email: true, role: true } },
+};
+
+/**
+ * Loads a task and enforces ownership. Returns either the task or an error response.
+ */
+async function findOwnedTask(
+  c: Context<AppEnv>,
+  id: string,
+  options: { action: string; allowDeleted?: boolean },
+) {
+  const task = await prisma.task.findUnique({ where: { id } });
+
+  if (!task || (task.deletedAt && !options.allowDeleted)) {
+    return { error: errorResponse(c, `Task with ID '${id}' not found.`, 404) };
+  }
+
+  if (task.userId !== c.get("user").userId) {
+    return {
+      error: errorResponse(
+        c,
+        `Access denied: You do not have permission to ${options.action} this task.`,
+        403,
+      ),
+    };
+  }
+
+  return { task };
+}
 
 /**
  * GET /api/tasks
@@ -26,28 +59,25 @@ export const taskRoutes = new Hono<AppEnv>();
  */
 taskRoutes.get(
   "/",
-  zValidator("query", taskQuerySchema, (result, c) => {
-    if (!result.success) {
-      return c.json(
-        {
-          success: false,
-          message: "Invalid task query parameters",
-          errors: result.error.flatten().fieldErrors,
-        },
-        400,
-      );
-    }
-  }),
+  validate("query", taskQuerySchema, "Invalid task query parameters"),
   async (c) => {
     const currentUser = c.get("user");
     const { page, limit, search, completed, sortBy, order, sort, includeDeleted } =
       c.req.valid("query");
     const skip = (page - 1) * limit;
 
+    // Apply generic filter[...] parameters first so they can never override the ownership scope
+    const where: TaskWhereInput = parseFilters(c.req.query(), {
+      allowedFields: {
+        title: "string",
+        description: "string",
+        completed: "boolean",
+        createdAt: "date",
+      },
+    });
+
     // Strict ownership filter: Always scope to the token's authenticated userId
-    const where: TaskWhereInput = {
-      userId: currentUser.userId,
-    };
+    where.userId = currentUser.userId;
 
     // Soft delete filter: By default, exclude soft-deleted tasks unless explicitly requested
     if (includeDeleted !== "true") {
@@ -62,20 +92,12 @@ taskRoutes.get(
       where.OR = [{ title: { contains: search } }, { description: { contains: search } }];
     }
 
-    // Apply generic filter[...] parameters
-    const dynamicFilters = parseFilters(c.req.query(), {
-      allowedFields: ["title", "description", "completed"],
-    });
-    Object.assign(where, dynamicFilters);
-
     // Apply sorting (prioritize ?sort=-field if provided, fallback to sortBy & order)
     const orderBy = sort
       ? parseSorting(sort, { allowedFields: ["createdAt", "title", "completed"] })
       : { [sortBy]: order };
 
-    const include = parseIncludes(c.req.query("include"), {
-      user: { select: { id: true, name: true, email: true, role: true } },
-    });
+    const include = parseIncludes(c.req.query("include"), TASK_INCLUDES);
 
     const [total, tasks] = await Promise.all([
       prisma.task.count({ where }),
@@ -88,70 +110,34 @@ taskRoutes.get(
       }),
     ]);
 
-    const totalPages = Math.ceil(total / limit) || 1;
-    const pagination: PaginationMeta = {
-      total,
-      page,
-      limit,
-      totalPages,
-      hasNextPage: page < totalPages,
-      hasPrevPage: page > 1,
-    };
-
-    return successResponse(
-      c,
-      tasks.map((t) => ({
-        ...t,
-        createdAt: t.createdAt.toISOString(),
-        deletedAt: t.deletedAt ? t.deletedAt.toISOString() : null,
-      })),
-      { pagination },
-    );
+    return successResponse(c, tasks, { pagination: buildPagination(total, page, limit) });
   },
 );
 
 /**
  * GET /api/tasks/:id
  * Retrieves a single task ensuring strict ownership validation.
+ * Soft-deleted tasks are only returned with ?includeDeleted=true.
  */
 taskRoutes.get("/:id", async (c) => {
   const id = c.req.param("id");
-  const currentUser = c.get("user");
-
-  const include = parseIncludes(c.req.query("include"), {
-    user: { select: { id: true, name: true, email: true, role: true } },
-  });
+  const include = parseIncludes(c.req.query("include"), TASK_INCLUDES);
 
   const task = await prisma.task.findUnique({
     where: { id },
     include,
   });
 
-  if (!task) {
-    return c.json(
-      {
-        success: false,
-        message: `Task with ID '${id}' not found.`,
-      },
-      404,
-    );
+  if (!task || (task.deletedAt && c.req.query("includeDeleted") !== "true")) {
+    return errorResponse(c, `Task with ID '${id}' not found.`, 404);
   }
 
   // Ownership verification
-  if (task.userId !== currentUser.userId) {
-    return c.json(
-      {
-        success: false,
-        message: "Access denied: You do not have permission to view this task.",
-      },
-      403,
-    );
+  if (task.userId !== c.get("user").userId) {
+    return errorResponse(c, "Access denied: You do not have permission to view this task.", 403);
   }
 
-  return successResponse(c, {
-    ...task,
-    createdAt: task.createdAt.toISOString(),
-  });
+  return successResponse(c, task);
 });
 
 /**
@@ -160,18 +146,7 @@ taskRoutes.get("/:id", async (c) => {
  */
 taskRoutes.post(
   "/",
-  zValidator("json", createTaskSchema, (result, c) => {
-    if (!result.success) {
-      return c.json(
-        {
-          success: false,
-          message: "Validation error when creating task",
-          errors: result.error.flatten().fieldErrors,
-        },
-        400,
-      );
-    }
-  }),
+  validate("json", createTaskSchema, "Validation error when creating task"),
   async (c) => {
     const { title, description, completed } = c.req.valid("json");
     const currentUser = c.get("user");
@@ -180,8 +155,8 @@ taskRoutes.post(
       data: {
         userId: currentUser.userId, // Secure assignment from verified token
         title,
-        description: description || "",
-        completed: Boolean(completed),
+        description,
+        completed,
       },
     });
 
@@ -193,18 +168,10 @@ taskRoutes.post(
       details: { title: newTask.title },
     });
 
-    return successResponse(
-      c,
-      {
-        ...newTask,
-        createdAt: newTask.createdAt.toISOString(),
-        deletedAt: null,
-      },
-      {
-        status: 201,
-        message: "Task created successfully.",
-      },
-    );
+    return successResponse(c, newTask, {
+      status: 201,
+      message: "Task created successfully.",
+    });
   },
 );
 
@@ -214,77 +181,54 @@ taskRoutes.post(
  */
 taskRoutes.put(
   "/:id",
-  zValidator("json", updateTaskSchema, (result, c) => {
-    if (!result.success) {
-      return c.json(
-        {
-          success: false,
-          message: "Validation error when updating task",
-          errors: result.error.flatten().fieldErrors,
-        },
-        400,
-      );
-    }
-  }),
+  validate("json", updateTaskSchema, "Validation error when updating task"),
   async (c) => {
     const id = c.req.param("id");
-    const currentUser = c.get("user");
+    const { error } = await findOwnedTask(c, id, { action: "edit" });
+    if (error) return error;
 
-    const existingTask = await prisma.task.findUnique({
-      where: { id },
-    });
-
-    if (!existingTask) {
-      return c.json(
-        {
-          success: false,
-          message: `Task with ID '${id}' not found.`,
-        },
-        404,
-      );
-    }
-
-    // Ownership verification
-    if (existingTask.userId !== currentUser.userId) {
-      return c.json(
-        {
-          success: false,
-          message: "Access denied: You cannot edit tasks belonging to other users.",
-        },
-        403,
-      );
-    }
-
-    const { title, description, completed } = c.req.valid("json");
-
+    const changes = c.req.valid("json");
     const updatedTask = await prisma.task.update({
       where: { id },
-      data: {
-        ...(title !== undefined && { title }),
-        ...(description !== undefined && { description }),
-        ...(completed !== undefined && { completed }),
-      },
+      data: changes,
     });
 
     await recordAudit(c, {
-      userId: currentUser.userId,
+      userId: c.get("user").userId,
       action: "UPDATE",
       entity: "Task",
-      entityId: updatedTask.id,
-      details: { changedFields: Object.keys(c.req.valid("json")) },
+      entityId: id,
+      details: { changedFields: Object.keys(changes) },
     });
 
-    return successResponse(
-      c,
-      {
-        ...updatedTask,
-        createdAt: updatedTask.createdAt.toISOString(),
-        deletedAt: updatedTask.deletedAt ? updatedTask.deletedAt.toISOString() : null,
-      },
-      { message: "Task updated successfully." },
-    );
+    return successResponse(c, updatedTask, { message: "Task updated successfully." });
   },
 );
+
+/**
+ * POST /api/tasks/:id/restore
+ * Restores a soft-deleted task.
+ */
+taskRoutes.post("/:id/restore", async (c) => {
+  const id = c.req.param("id");
+  const { task, error } = await findOwnedTask(c, id, { action: "restore", allowDeleted: true });
+  if (error) return error;
+
+  if (!task.deletedAt) {
+    return errorResponse(c, "Task is not deleted.", 409);
+  }
+
+  const restored = await prisma.task.update({ where: { id }, data: { deletedAt: null } });
+
+  await recordAudit(c, {
+    userId: c.get("user").userId,
+    action: "RESTORE",
+    entity: "Task",
+    entityId: id,
+  });
+
+  return successResponse(c, restored, { message: "Task restored successfully." });
+});
 
 /**
  * DELETE /api/tasks/:id
@@ -292,33 +236,13 @@ taskRoutes.put(
  */
 taskRoutes.delete("/:id", async (c) => {
   const id = c.req.param("id");
-  const currentUser = c.get("user");
   const isPermanent = c.req.query("permanent") === "true";
 
-  const existingTask = await prisma.task.findUnique({
-    where: { id },
-  });
+  // Permanent deletion is also allowed on already soft-deleted tasks
+  const { error } = await findOwnedTask(c, id, { action: "delete", allowDeleted: isPermanent });
+  if (error) return error;
 
-  if (!existingTask) {
-    return c.json(
-      {
-        success: false,
-        message: `Task with ID '${id}' not found.`,
-      },
-      404,
-    );
-  }
-
-  // Ownership verification
-  if (existingTask.userId !== currentUser.userId) {
-    return c.json(
-      {
-        success: false,
-        message: "Access denied: You cannot delete tasks belonging to other users.",
-      },
-      403,
-    );
-  }
+  const userId = c.get("user").userId;
 
   if (isPermanent) {
     await prisma.task.delete({
@@ -326,7 +250,7 @@ taskRoutes.delete("/:id", async (c) => {
     });
 
     await recordAudit(c, {
-      userId: currentUser.userId,
+      userId,
       action: "DELETE_PERMANENT",
       entity: "Task",
       entityId: id,
@@ -346,19 +270,11 @@ taskRoutes.delete("/:id", async (c) => {
   });
 
   await recordAudit(c, {
-    userId: currentUser.userId,
+    userId,
     action: "SOFT_DELETE",
     entity: "Task",
     entityId: id,
   });
 
-  return successResponse(
-    c,
-    {
-      ...softDeleted,
-      createdAt: softDeleted.createdAt.toISOString(),
-      deletedAt: softDeleted.deletedAt?.toISOString() || null,
-    },
-    { message: "Task soft-deleted successfully." },
-  );
+  return successResponse(c, softDeleted, { message: "Task soft-deleted successfully." });
 });

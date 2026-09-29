@@ -7,7 +7,9 @@
 
 import { Hono } from "hono";
 import { prisma } from "../db.js";
-import { buildMeta } from "../lib/response.js";
+import { recordAudit } from "../lib/audit.js";
+import { buildMeta, errorResponse, successResponse } from "../lib/response.js";
+import { revokeSession, revokeUserSessions } from "../services/sessions.js";
 import type { AppEnv } from "../types/index.js";
 
 export const sessionRoutes = new Hono<AppEnv>();
@@ -30,8 +32,6 @@ sessionRoutes.get("/me", async (c) => {
     currentSessionId: currentUser.sessionId,
     data: sessions.map((s) => ({
       ...s,
-      createdAt: s.createdAt.toISOString(),
-      expiresAt: s.expiresAt.toISOString(),
       isCurrent: s.id === currentUser.sessionId,
     })),
     meta: buildMeta(c),
@@ -51,38 +51,29 @@ sessionRoutes.delete("/:sessionId", async (c) => {
   });
 
   if (!session) {
-    return c.json(
-      {
-        success: false,
-        message: `Session with ID '${sessionId}' not found.`,
-      },
-      404,
-    );
+    return errorResponse(c, `Session with ID '${sessionId}' not found.`, 404);
   }
 
   // Ownership verification: Users can only revoke their own sessions (admins can revoke any)
   if (session.userId !== currentUser.userId && currentUser.role !== "admin") {
-    return c.json(
-      {
-        success: false,
-        message: "Access denied: You cannot terminate sessions belonging to other users.",
-      },
+    return errorResponse(
+      c,
+      "Access denied: You cannot terminate sessions belonging to other users.",
       403,
     );
   }
 
-  // Deactivate session and purge associated refresh tokens
-  await prisma.session.update({
-    where: { id: sessionId },
-    data: { isActive: false },
+  await revokeSession(sessionId);
+
+  await recordAudit(c, {
+    userId: currentUser.userId,
+    action: "REVOKE_SESSION",
+    entity: "Session",
+    entityId: sessionId,
+    details: { ownerId: session.userId },
   });
 
-  await prisma.refreshToken.deleteMany({
-    where: { sessionId },
-  });
-
-  return c.json({
-    success: true,
+  return successResponse(c, null, {
     message: `Session '${sessionId}' has been revoked successfully.`,
   });
 });
@@ -94,17 +85,17 @@ sessionRoutes.delete("/:sessionId", async (c) => {
 sessionRoutes.post("/revoke-all", async (c) => {
   const currentUser = c.get("user");
 
-  await prisma.session.updateMany({
-    where: { userId: currentUser.userId, isActive: true },
-    data: { isActive: false },
+  const revokedCount = await revokeUserSessions(currentUser.userId);
+
+  await recordAudit(c, {
+    userId: currentUser.userId,
+    action: "REVOKE_ALL_SESSIONS",
+    entity: "User",
+    entityId: currentUser.userId,
+    details: { revokedCount },
   });
 
-  await prisma.refreshToken.deleteMany({
-    where: { userId: currentUser.userId },
-  });
-
-  return c.json({
-    success: true,
+  return successResponse(c, null, {
     message: "All active sessions have been revoked. You must log in again.",
   });
 });

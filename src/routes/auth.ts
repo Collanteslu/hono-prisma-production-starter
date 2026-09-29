@@ -1,173 +1,141 @@
 /**
  * @file auth.ts
- * @description Authentication endpoints providing login, token refresh with rotation, and logout.
+ * @description Authentication endpoints providing registration, login, token refresh with rotation, and logout.
  * Includes database-persisted session tracking and brute-force protection via rate limiting.
  */
 
-import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
-import { sign, verify } from "hono/jwt";
+import { verify } from "hono/jwt";
 import { env } from "../config/env.js";
 import { prisma } from "../db.js";
-import { buildMeta } from "../lib/response.js";
-import { rateLimiter } from "../middleware/rateLimit.js";
-import { loginSchema, logoutSchema, refreshTokenSchema } from "../schemas/index.js";
+import { recordAudit } from "../lib/audit.js";
+import { getClientIp } from "../lib/clientIp.js";
+import { buildMeta, errorResponse, successResponse } from "../lib/response.js";
+import { validate } from "../lib/validator.js";
+import { createLoginLockout, rateLimiter } from "../middleware/rateLimit.js";
+import { loginSchema, logoutSchema, refreshTokenSchema, registerSchema } from "../schemas/index.js";
+import {
+  createSessionAndTokens,
+  hashToken,
+  type RefreshTokenPayload,
+  revokeSession,
+  rotateRefreshToken,
+} from "../services/sessions.js";
 import type { AppEnv } from "../types/index.js";
-import { comparePassword } from "../utils/password.js";
+import { comparePassword, getDummyHash, hashPassword } from "../utils/password.js";
 
 export const authRoutes = new Hono<AppEnv>();
 
-// Apply strict rate limiting on login endpoint (30 requests / minute)
-authRoutes.use("/login", rateLimiter(60_000, 30));
+// Per-IP rate limiting on sensitive endpoints
+authRoutes.use("/login", rateLimiter(60_000, env.LOGIN_RATE_LIMIT_MAX));
+authRoutes.use("/refresh", rateLimiter(60_000, env.REFRESH_RATE_LIMIT_MAX));
+authRoutes.use("/register", rateLimiter(60 * 60_000, env.REGISTER_RATE_LIMIT_MAX));
+
+// Per-account lockout: 5 failed passwords lock the account for 15 minutes
+const loginLockout = createLoginLockout();
 
 /**
- * Creates an active database session record and issues an Access + Refresh Token pair.
- * @param user Authenticated user entity
- * @param userAgent Device User-Agent header string
- * @param ipAddress Remote IP address
+ * POST /api/auth/register
+ * Public self-service registration. Accounts are always created with the "user" role.
  */
-async function createSessionAndTokens(
-  user: { id: string; email: string; role: string },
-  userAgent?: string,
-  ipAddress?: string,
-) {
-  const nowSec = Math.floor(Date.now() / 1000);
+authRoutes.post(
+  "/register",
+  validate("json", registerSchema, "Validation error when registering account"),
+  async (c) => {
+    const { name, email, password } = c.req.valid("json");
 
-  // 1. Create session record in SQLite (7 days lifetime)
-  const sessionExpDate = new Date((nowSec + 60 * 60 * 24 * 7) * 1000);
-  const session = await prisma.session.create({
-    data: {
-      userId: user.id,
-      userAgent: userAgent || "Unknown Client",
-      ipAddress: ipAddress || "localhost",
-      isActive: true,
-      expiresAt: sessionExpDate,
-    },
-  });
+    const existing = await prisma.user.findUnique({ where: { email }, select: { id: true } });
+    if (existing) {
+      return errorResponse(c, `Email '${email}' is already registered.`, 409);
+    }
 
-  // 2. Access Token (15 minutes lifespan) tied to the active sessionId
-  const accessExp = nowSec + 60 * 15;
-  const accessToken = await sign(
-    {
-      userId: user.id,
-      sessionId: session.id,
-      email: user.email,
-      role: user.role,
-      exp: accessExp,
-    },
-    env.JWT_SECRET,
-    "HS256",
-  );
+    const newUser = await prisma.user.create({
+      data: { name, email, password: await hashPassword(password), role: "user" },
+    });
 
-  // 3. Refresh Token (7 days lifespan) tied to the session
-  const refreshExp = nowSec + 60 * 60 * 24 * 7;
-  const refreshToken = await sign(
-    {
-      userId: user.id,
-      sessionId: session.id,
-      email: user.email,
-      role: user.role,
-      iat: nowSec,
-      nonce: Math.random().toString(36).substring(2, 10),
-      exp: refreshExp,
-    },
-    env.JWT_REFRESH_SECRET,
-    "HS256",
-  );
+    await recordAudit(c, {
+      userId: newUser.id,
+      action: "REGISTER",
+      entity: "User",
+      entityId: newUser.id,
+    });
 
-  // 4. Persist refresh token in database
-  await prisma.refreshToken.create({
-    data: {
-      token: refreshToken,
-      userId: user.id,
-      sessionId: session.id,
-      expiresAt: new Date(refreshExp * 1000),
-    },
-  });
-
-  return {
-    accessToken,
-    refreshToken,
-    expiresIn: 60 * 15,
-    sessionId: session.id,
-  };
-}
+    return successResponse(c, newUser, {
+      status: 201,
+      message: "Account registered successfully.",
+    });
+  },
+);
 
 /**
  * POST /api/auth/login
  * Validates user credentials, ensures account is not blocked, and establishes an active session.
  */
-authRoutes.post(
-  "/login",
-  zValidator("json", loginSchema, (result, c) => {
-    if (!result.success) {
-      return c.json(
-        {
-          success: false,
-          message: "Validation error in request payload",
-          errors: result.error.flatten().fieldErrors,
-        },
-        400,
-      );
-    }
-  }),
-  async (c) => {
-    const { email, password } = c.req.valid("json");
+authRoutes.post("/login", validate("json", loginSchema), async (c) => {
+  const { email, password } = c.req.valid("json");
 
-    // Dummy hash to execute constant-time bcrypt work even when user does not exist
-    const DUMMY_HASH = "$2a$10$abcdefghijklmnopqrstuvwxyzABCDEF01234567890123456789012";
+  const lockedForSeconds = loginLockout.retryAfterSeconds(email);
+  if (lockedForSeconds > 0) {
+    c.header("Retry-After", lockedForSeconds.toString());
+    return errorResponse(
+      c,
+      "Too many failed login attempts for this account. Please try again later.",
+      429,
+    );
+  }
 
-    const user = await prisma.user.findUnique({
-      where: { email: email.toLowerCase() },
+  const user = await prisma.user.findUnique({
+    where: { email },
+    omit: { password: false },
+  });
+
+  // Constant-time bcrypt comparison (always executed to prevent timing side-channel leaks)
+  const isValidPassword = await comparePassword(password, user?.password ?? (await getDummyHash()));
+
+  if (!user || !isValidPassword || user.deletedAt) {
+    loginLockout.recordFailure(email);
+    await recordAudit(c, {
+      userId: user?.id ?? null,
+      action: "LOGIN_FAILED",
+      entity: "Session",
+      details: { email },
     });
+    return errorResponse(c, "Invalid credentials (incorrect email or password)", 401);
+  }
 
-    // Constant-time bcrypt hash comparison (always executed to prevent timing side-channel leaks)
-    const passwordToCompare = user ? user.password : DUMMY_HASH;
-    const isValidPassword = await comparePassword(password, passwordToCompare);
+  loginLockout.reset(email);
 
-    if (!user || !isValidPassword) {
-      return c.json(
-        {
-          success: false,
-          message: "Invalid credentials (incorrect email or password)",
-        },
-        401,
-      );
-    }
+  // Verify account suspension status after password check to prevent status enumeration
+  if (user.isBlocked) {
+    return errorResponse(c, "Account has been suspended. Please contact support.", 403);
+  }
 
-    // Verify account suspension status after password check to prevent status enumeration
-    if (user.isBlocked) {
-      return c.json(
-        {
-          success: false,
-          message: "Account has been suspended. Please contact support.",
-        },
-        403,
-      );
-    }
+  const sessionData = await createSessionAndTokens(
+    user,
+    c.req.header("user-agent"),
+    getClientIp(c),
+  );
 
-    const userAgent = c.req.header("user-agent");
-    const ipAddress =
-      c.req.header("x-forwarded-for")?.split(",")[0].trim() ||
-      c.req.header("x-real-ip") ||
-      "localhost";
+  await recordAudit(c, {
+    userId: user.id,
+    action: "LOGIN",
+    entity: "Session",
+    entityId: sessionData.sessionId,
+  });
 
-    const sessionData = await createSessionAndTokens(user, userAgent, ipAddress);
-
-    return c.json({
-      success: true,
-      message: "Authentication successful",
-      ...sessionData,
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-      },
-      meta: buildMeta(c),
-    });
-  },
-);
+  return c.json({
+    success: true,
+    message: "Authentication successful",
+    ...sessionData,
+    user: {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+    },
+    meta: buildMeta(c),
+  });
+});
 
 /**
  * POST /api/auth/refresh
@@ -175,158 +143,57 @@ authRoutes.post(
  */
 authRoutes.post(
   "/refresh",
-  zValidator("json", refreshTokenSchema, (result, c) => {
-    if (!result.success) {
-      return c.json(
-        {
-          success: false,
-          message: "Missing or invalid refresh token payload",
-          errors: result.error.flatten().fieldErrors,
-        },
-        400,
-      );
-    }
-  }),
+  validate("json", refreshTokenSchema, "Missing or invalid refresh token payload"),
   async (c) => {
     const { refreshToken } = c.req.valid("json");
 
+    let payload: RefreshTokenPayload;
     try {
-      const payload = (await verify(refreshToken, env.JWT_REFRESH_SECRET, "HS256")) as unknown as {
-        userId: string;
-        sessionId?: string;
-      };
-
-      // 1. Check account suspension status
-      const user = await prisma.user.findUnique({
-        where: { id: payload.userId },
-      });
-
-      if (!user || user.isBlocked) {
-        return c.json(
-          {
-            success: false,
-            message: "Access denied: Account does not exist or has been suspended.",
-          },
-          403,
-        );
-      }
-
-      // 2. Verify that parent session remains active
-      if (payload.sessionId) {
-        const session = await prisma.session.findUnique({
-          where: { id: payload.sessionId },
-        });
-
-        if (!session?.isActive || session.expiresAt < new Date()) {
-          return c.json(
-            {
-              success: false,
-              message: "Session has been revoked or expired. Please sign in again.",
-            },
-            401,
-          );
-        }
-      }
-
-      // 3. Verify that refresh token exists in database and has not expired
-      const storedToken = await prisma.refreshToken.findUnique({
-        where: { token: refreshToken },
-      });
-
-      // Security (Token Reuse Detection): If a validly signed JWT refresh token is reused after rotation,
-      // it means someone may have compromised the token. Revoke the entire session immediately.
-      if (!storedToken) {
-        if (payload.sessionId) {
-          await Promise.all([
-            prisma.session.update({
-              where: { id: payload.sessionId },
-              data: { isActive: false },
-            }),
-            prisma.refreshToken.deleteMany({
-              where: { sessionId: payload.sessionId },
-            }),
-          ]);
-        }
-        return c.json(
-          {
-            success: false,
-            message:
-              "Security alert: Refresh token has already been used or revoked. Session terminated.",
-          },
-          401,
-        );
-      }
-
-      if (storedToken.expiresAt < new Date()) {
-        return c.json(
-          {
-            success: false,
-            message: "Refresh token expired. Please sign in again.",
-          },
-          401,
-        );
-      }
-
-      // 4. Token Rotation: Invalidate used refresh token and issue a fresh pair
-      await prisma.refreshToken.delete({
-        where: { id: storedToken.id },
-      });
-
-      const nowSec = Math.floor(Date.now() / 1000);
-      const accessExp = nowSec + 60 * 15;
-      const newAccessToken = await sign(
-        {
-          userId: user.id,
-          sessionId: payload.sessionId || "",
-          email: user.email,
-          role: user.role,
-          exp: accessExp,
-        },
-        env.JWT_SECRET,
-        "HS256",
-      );
-
-      const refreshExp = nowSec + 60 * 60 * 24 * 7;
-      const newRefreshToken = await sign(
-        {
-          userId: user.id,
-          sessionId: payload.sessionId || "",
-          email: user.email,
-          role: user.role,
-          iat: nowSec,
-          nonce: Math.random().toString(36).substring(2, 10),
-          exp: refreshExp,
-        },
+      payload = (await verify(
+        refreshToken,
         env.JWT_REFRESH_SECRET,
         "HS256",
-      );
+      )) as unknown as RefreshTokenPayload;
+    } catch {
+      return errorResponse(c, "Corrupted or invalid refresh token.", 401);
+    }
 
-      await prisma.refreshToken.create({
-        data: {
-          token: newRefreshToken,
-          userId: user.id,
-          sessionId: payload.sessionId,
-          expiresAt: new Date(refreshExp * 1000),
-        },
-      });
+    const result = await rotateRefreshToken(refreshToken, payload);
 
-      return c.json({
-        success: true,
-        message: "Tokens renewed successfully (Token Rotation)",
-        accessToken: newAccessToken,
-        refreshToken: newRefreshToken,
-        expiresIn: 60 * 15,
-        sessionId: payload.sessionId,
-        meta: buildMeta(c),
-      });
-    } catch (_err) {
-      return c.json(
-        {
-          success: false,
-          message: "Corrupted or invalid refresh token.",
-        },
-        401,
-      );
+    switch (result.status) {
+      case "rotated":
+        return c.json({
+          success: true,
+          message: "Tokens renewed successfully (Token Rotation)",
+          ...result.tokens,
+          meta: buildMeta(c),
+        });
+      case "invalid_account":
+        return errorResponse(
+          c,
+          "Access denied: Account does not exist or has been suspended.",
+          403,
+        );
+      case "session_inactive":
+        return errorResponse(c, "Session has been revoked or expired. Please sign in again.", 401);
+      case "concurrent":
+        return errorResponse(
+          c,
+          "Refresh token was already rotated by a concurrent request. Use the most recent token pair.",
+          409,
+        );
+      case "reused":
+        await recordAudit(c, {
+          userId: payload.userId,
+          action: "TOKEN_REUSE_DETECTED",
+          entity: "Session",
+          entityId: payload.sessionId ?? null,
+        });
+        return errorResponse(
+          c,
+          "Security alert: Refresh token has already been used or revoked. Session terminated.",
+          401,
+        );
     }
   },
 );
@@ -335,57 +202,38 @@ authRoutes.post(
  * POST /api/auth/logout
  * Deactivates session record in SQLite and purges associated refresh tokens.
  */
-authRoutes.post("/logout", zValidator("json", logoutSchema), async (c) => {
+authRoutes.post("/logout", validate("json", logoutSchema), async (c) => {
   const { refreshToken } = c.req.valid("json");
   const authHeader = c.req.header("Authorization");
+  const revoked = new Map<string, string>(); // sessionId -> userId
 
-  try {
-    // 1. If called with Bearer Token, terminate the current session
-    if (authHeader?.startsWith("Bearer ")) {
-      const token = authHeader.split(" ")[1];
-      try {
-        const payload = (await verify(token, env.JWT_SECRET, "HS256")) as unknown as {
-          sessionId?: string;
-        };
-        if (payload.sessionId) {
-          await prisma.session.update({
-            where: { id: payload.sessionId },
-            data: { isActive: false },
-          });
-          await prisma.refreshToken.deleteMany({
-            where: { sessionId: payload.sessionId },
-          });
-        }
-      } catch (_) {}
+  // 1. If called with a Bearer token, terminate the current session
+  if (authHeader?.startsWith("Bearer ")) {
+    try {
+      const payload = (await verify(
+        authHeader.slice("Bearer ".length).trim(),
+        env.JWT_SECRET,
+        "HS256",
+      )) as unknown as RefreshTokenPayload;
+      if (payload.sessionId) revoked.set(payload.sessionId, payload.userId);
+    } catch {
+      // An expired/invalid access token must not prevent logout via refresh token
     }
-
-    // 2. If a refreshToken was passed in payload, revoke its session
-    if (refreshToken) {
-      const stored = await prisma.refreshToken.findUnique({
-        where: { token: refreshToken },
-      });
-      if (stored?.sessionId) {
-        await prisma.session.updateMany({
-          where: { id: stored.sessionId },
-          data: { isActive: false },
-        });
-      }
-      await prisma.refreshToken.deleteMany({
-        where: { token: refreshToken },
-      });
-    }
-
-    return c.json({
-      success: true,
-      message: "Logged out successfully. Session revoked.",
-    });
-  } catch (_error) {
-    return c.json(
-      {
-        success: false,
-        message: "Error processing logout request.",
-      },
-      500,
-    );
   }
+
+  // 2. If a refresh token was provided, revoke the session it belongs to
+  if (refreshToken) {
+    const stored = await prisma.refreshToken.findUnique({
+      where: { tokenHash: hashToken(refreshToken) },
+    });
+    if (stored?.sessionId) revoked.set(stored.sessionId, stored.userId);
+    else if (stored) await prisma.refreshToken.delete({ where: { id: stored.id } });
+  }
+
+  for (const [sessionId, userId] of revoked) {
+    await revokeSession(sessionId);
+    await recordAudit(c, { userId, action: "LOGOUT", entity: "Session", entityId: sessionId });
+  }
+
+  return successResponse(c, null, { message: "Logged out successfully. Session revoked." });
 });

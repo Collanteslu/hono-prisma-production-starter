@@ -10,6 +10,7 @@ import { apiReference } from "@scalar/hono-api-reference";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
+import { HTTPException } from "hono/http-exception";
 import { logger } from "hono/logger";
 import { prettyJSON } from "hono/pretty-json";
 import { secureHeaders } from "hono/secure-headers";
@@ -18,8 +19,11 @@ import { secureHeaders } from "hono/secure-headers";
 import { env } from "./config/env.js";
 import { prisma, seedDatabase } from "./db.js";
 import { openApiSpec } from "./docs/openapi.js";
+import { Prisma } from "./generated/client/client.js";
 import { startCleanupJob } from "./jobs/cleanup.js";
 import { logger as appLogger } from "./lib/logger.js";
+import { errorResponse } from "./lib/response.js";
+import { API_VERSION } from "./lib/version.js";
 // Middlewares
 import { authMiddleware } from "./middleware/auth.js";
 import { requestIdMiddleware } from "./middleware/requestId.js";
@@ -47,14 +51,17 @@ app.use("*", requestIdMiddleware);
 // 2. HTTP Security: Injects HSTS, XSS Protection, CSP, No-Sniff, and Frameguard headers
 app.use("*", secureHeaders());
 
-// 3. HTTP access logger with response time calculation
-app.use("*", logger());
+// 3. HTTP access logger with response time calculation (routed through the structured Pino logger)
+app.use(
+  "*",
+  logger((message, ...rest) => appLogger.info([message, ...rest].join(" "))),
+);
 
-// 4. Cross-Origin Resource Sharing (CORS) configuration
+// 4. Cross-Origin Resource Sharing (CORS) configuration (origins configurable via CORS_ORIGINS)
 app.use(
   "*",
   cors({
-    origin: "*",
+    origin: env.CORS_ORIGINS.includes("*") ? "*" : env.CORS_ORIGINS,
     allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowHeaders: ["Content-Type", "Authorization", "X-Request-Id"],
   }),
@@ -84,19 +91,22 @@ app.use(
  * Interactive OpenAPI Documentation (Scalar) & Healthcheck
  * -------------------------------------------------------------
  */
-// Raw OpenAPI 3.0 specification endpoint
-app.get("/openapi.json", (c) => c.json(openApiSpec));
+// Documentation is enabled by default outside production (override with ENABLE_DOCS)
+if (env.ENABLE_DOCS ?? env.NODE_ENV !== "production") {
+  // Raw OpenAPI 3.0 specification endpoint
+  app.get("/openapi.json", (c) => c.json(openApiSpec));
 
-// Interactive web console at /docs powered by Scalar
-app.get(
-  "/docs",
-  apiReference({
-    pageTitle: "API Reference | Hono + Prisma",
-    spec: {
-      url: "/openapi.json",
-    },
-  }),
-);
+  // Interactive web console at /docs powered by Scalar
+  app.get(
+    "/docs",
+    apiReference({
+      pageTitle: "API Reference | Hono + Prisma",
+      spec: {
+        url: "/openapi.json",
+      },
+    }),
+  );
+}
 
 // Deep Healthcheck endpoint verifying process uptime and SQLite latency
 app.get("/healthz", async (c) => {
@@ -115,13 +125,14 @@ app.get("/healthz", async (c) => {
       },
     });
   } catch (error) {
+    // Details are logged server-side only; the public endpoint must not leak internals
+    appLogger.error({ err: error }, "Healthcheck database probe failed");
     return c.json(
       {
         status: "unhealthy",
         timestamp: new Date().toISOString(),
         database: {
           status: "disconnected",
-          error: error instanceof Error ? error.message : "Database connection error",
         },
       },
       503,
@@ -134,12 +145,13 @@ app.get("/", (c) => {
   return c.json({
     status: "online",
     name: "Production REST API Template with Hono, Prisma 7, SQLite & Stateful Sessions",
-    version: "1.2.0",
+    version: API_VERSION,
     documentationUrl: "/docs",
     endpoints: {
       healthcheck: "/healthz",
       documentation: "/docs",
       auth: {
+        register: "POST /api/auth/register",
         login: "POST /api/auth/login",
         refresh: "POST /api/auth/refresh",
         logout: "POST /api/auth/logout",
@@ -155,6 +167,8 @@ app.get("/", (c) => {
         revokeAllUserSessions: "POST /api/users/:id/revoke-sessions",
       },
       tasks: "GET, POST, PUT, DELETE /api/tasks",
+      restoreTask: "POST /api/tasks/:id/restore",
+      auditLogs: "GET /api/audit-logs",
     },
   });
 });
@@ -165,10 +179,11 @@ app.get("/", (c) => {
  * -------------------------------------------------------------
  */
 // Apply authentication middleware to protected route paths
-app.use("/api/sessions/*", authMiddleware);
-app.use("/api/users/*", authMiddleware);
-app.use("/api/tasks/*", authMiddleware);
-app.use("/api/audit-logs/*", authMiddleware);
+// Both the exact prefix and its sub-paths are protected
+for (const prefix of ["/api/sessions", "/api/users", "/api/tasks", "/api/audit-logs"]) {
+  app.use(prefix, authMiddleware);
+  app.use(`${prefix}/*`, authMiddleware);
+}
 
 // Public authentication routes and protected resource modules chained cleanly for Hono RPC
 const routes = app
@@ -189,26 +204,31 @@ export type AppType = typeof routes;
  * -------------------------------------------------------------
  */
 app.notFound((c) => {
-  return c.json(
-    {
-      success: false,
-      message: `Route not found: ${c.req.method} ${c.req.url}`,
-      requestId: c.get("requestId"),
-    },
-    404,
-  );
+  return errorResponse(c, `Route not found: ${c.req.method} ${c.req.path}`, 404);
 });
 
 app.onError((err, c) => {
-  console.error(`[Error] RequestId: ${c.get("requestId")}:`, err);
-  return c.json(
-    {
-      success: false,
-      message: "Internal server error.",
-      requestId: c.get("requestId"),
-      error: env.NODE_ENV === "development" ? err.message : undefined,
-    },
+  // Expected HTTP errors (malformed JSON, invalid filters, body limits, ...) keep their status code
+  if (err instanceof HTTPException) {
+    return errorResponse(c, err.message || "Request could not be processed.", err.status);
+  }
+
+  // Map known database constraint errors (e.g. races between existence checks and writes)
+  if (err instanceof Prisma.PrismaClientKnownRequestError) {
+    if (err.code === "P2002") {
+      return errorResponse(c, "Conflict: A record with the same unique value already exists.", 409);
+    }
+    if (err.code === "P2025") {
+      return errorResponse(c, "Resource not found.", 404);
+    }
+  }
+
+  appLogger.error({ err, requestId: c.get("requestId") }, "Unhandled request error");
+  return errorResponse(
+    c,
+    "Internal server error.",
     500,
+    env.NODE_ENV === "development" ? err.message : undefined,
   );
 });
 
