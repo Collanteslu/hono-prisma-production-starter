@@ -26,6 +26,9 @@ jobs:
       - name: 🛠️ Generar Prisma Client
         run: npx prisma generate
 
+      - name: 🗄️ Crear esquema de base de datos para Tests
+        run: npx prisma db push
+
       - name: 🔎 Verificación de tipos TypeScript (Build)
         run: npm run build
 
