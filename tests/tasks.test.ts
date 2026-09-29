@@ -72,4 +72,20 @@ describe("Tasks CRUD & Ownership API", () => {
 
     expect(res.status).toBe(200);
   });
+
+  it("GET /api/tasks?include=user should expand relational user object in each task", async () => {
+    const res = await app.request("/api/tasks?limit=2&include=user", {
+      headers: {
+        Authorization: `Bearer ${userToken}`,
+      },
+    });
+
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.success).toBe(true);
+    expect(data.data.length).toBeGreaterThan(0);
+    expect(data.data[0].user).toBeDefined();
+    expect(data.data[0].user.email).toBeDefined();
+    expect(data.data[0].user.password).toBeUndefined(); // Sensitive fields protected
+  });
 });

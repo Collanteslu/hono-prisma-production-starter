@@ -11,6 +11,7 @@ import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import { prisma } from "../db.js";
 import type { TaskWhereInput } from "../generated/client/models.js";
+import { parseIncludes } from "../lib/relations.js";
 import { successResponse } from "../lib/response.js";
 import { createTaskSchema, taskQuerySchema, updateTaskSchema } from "../schemas/index.js";
 import type { AppEnv, PaginationMeta } from "../types/index.js";
@@ -53,6 +54,10 @@ taskRoutes.get(
       where.OR = [{ title: { contains: search } }, { description: { contains: search } }];
     }
 
+    const include = parseIncludes(c.req.query("include"), {
+      user: { select: { id: true, name: true, email: true, role: true } },
+    });
+
     const [total, tasks] = await Promise.all([
       prisma.task.count({ where }),
       prisma.task.findMany({
@@ -60,6 +65,7 @@ taskRoutes.get(
         skip,
         take: limit,
         orderBy: { [sortBy]: order },
+        include,
       }),
     ]);
 
@@ -92,8 +98,13 @@ taskRoutes.get("/:id", async (c) => {
   const id = c.req.param("id");
   const currentUser = c.get("user");
 
+  const include = parseIncludes(c.req.query("include"), {
+    user: { select: { id: true, name: true, email: true, role: true } },
+  });
+
   const task = await prisma.task.findUnique({
     where: { id },
+    include,
   });
 
   if (!task) {

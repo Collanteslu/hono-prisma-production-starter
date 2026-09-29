@@ -8,6 +8,7 @@ import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import { prisma } from "../db.js";
 import type { UserWhereInput } from "../generated/client/models.js";
+import { parseIncludes } from "../lib/relations.js";
 import { successResponse } from "../lib/response.js";
 import {
   blockUserSchema,
@@ -31,6 +32,21 @@ function sanitizeUser(user: {
   isBlocked: boolean;
   blockedReason?: string | null;
   createdAt: Date;
+  tasks?: Array<{
+    id: string;
+    title: string;
+    description: string;
+    completed: boolean;
+    createdAt: Date;
+  }>;
+  sessions?: Array<{
+    id: string;
+    userAgent: string | null;
+    ipAddress: string | null;
+    isActive: boolean;
+    expiresAt: Date;
+    createdAt: Date;
+  }>;
 }) {
   return {
     id: user.id,
@@ -40,6 +56,19 @@ function sanitizeUser(user: {
     isBlocked: user.isBlocked,
     blockedReason: user.blockedReason,
     createdAt: user.createdAt.toISOString(),
+    ...(user.tasks && {
+      tasks: user.tasks.map((t) => ({
+        ...t,
+        createdAt: t.createdAt.toISOString(),
+      })),
+    }),
+    ...(user.sessions && {
+      sessions: user.sessions.map((s) => ({
+        ...s,
+        createdAt: s.createdAt.toISOString(),
+        expiresAt: s.expiresAt.toISOString(),
+      })),
+    }),
   };
 }
 
@@ -79,6 +108,11 @@ userRoutes.get(
       where.OR = [{ name: { contains: search } }, { email: { contains: search } }];
     }
 
+    const include = parseIncludes(c.req.query("include"), {
+      tasks: true,
+      sessions: true,
+    });
+
     const [total, users] = await Promise.all([
       prisma.user.count({ where }),
       prisma.user.findMany({
@@ -86,6 +120,7 @@ userRoutes.get(
         skip,
         take: limit,
         orderBy: { [sortBy]: order },
+        include,
       }),
     ]);
 
@@ -109,8 +144,14 @@ userRoutes.get(
  */
 userRoutes.get("/:id", async (c) => {
   const id = c.req.param("id");
+  const include = parseIncludes(c.req.query("include"), {
+    tasks: true,
+    sessions: true,
+  });
+
   const user = await prisma.user.findUnique({
     where: { id },
+    include,
   });
 
   if (!user) {
