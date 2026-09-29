@@ -58,6 +58,23 @@ export const openApiSpec = {
           hasPrevPage: { type: "boolean", example: false },
         },
       },
+      ResponseMeta: {
+        type: "object",
+        properties: {
+          requestId: {
+            type: "string",
+            format: "uuid",
+            example: "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+          },
+          timestamp: { type: "string", format: "date-time", example: "2026-09-29T22:00:00.000Z" },
+          durationMs: {
+            type: "number",
+            example: 3.45,
+            description: "Tiempo de procesamiento del servidor en ms",
+          },
+          apiVersion: { type: "string", example: "1.1.0" },
+        },
+      },
     },
   },
   paths: {
@@ -155,6 +172,12 @@ export const openApiSpec = {
           { name: "limit", in: "query", schema: { type: "integer", default: 10 } },
           { name: "search", in: "query", schema: { type: "string" } },
           { name: "role", in: "query", schema: { type: "string", enum: ["admin", "user"] } },
+          {
+            name: "include",
+            in: "query",
+            description: "Expansión relacional separada por comas (ej. tasks,sessions)",
+            schema: { type: "string", example: "tasks,sessions" },
+          },
         ],
         responses: {
           "200": { description: "Lista paginada de usuarios" },
@@ -186,6 +209,27 @@ export const openApiSpec = {
         },
       },
     },
+    "/api/users/{id}": {
+      get: {
+        summary: "Obtener usuario por ID",
+        description:
+          "Permite inspeccionar el perfil de un usuario con expansión relacional de sus tareas y sesiones.",
+        security: [{ BearerAuth: [] }],
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string" } },
+          {
+            name: "include",
+            in: "query",
+            description: "Expansión relacional (ej. tasks,sessions)",
+            schema: { type: "string", example: "tasks" },
+          },
+        ],
+        responses: {
+          "200": { description: "Perfil del usuario recuperado" },
+          "404": { description: "Usuario no encontrado" },
+        },
+      },
+    },
     "/api/tasks": {
       get: {
         summary: "Listar tareas del usuario autenticado (Paginado)",
@@ -195,6 +239,12 @@ export const openApiSpec = {
           { name: "limit", in: "query", schema: { type: "integer", default: 10 } },
           { name: "search", in: "query", schema: { type: "string" } },
           { name: "completed", in: "query", schema: { type: "string", enum: ["true", "false"] } },
+          {
+            name: "include",
+            in: "query",
+            description: "Expansión relacional (ej. user para incrustar datos del autor)",
+            schema: { type: "string", example: "user" },
+          },
         ],
         responses: {
           "200": { description: "Lista de tareas del usuario" },
@@ -228,7 +278,15 @@ export const openApiSpec = {
       get: {
         summary: "Ver tarea por ID (Solo el dueño)",
         security: [{ BearerAuth: [] }],
-        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string" } },
+          {
+            name: "include",
+            in: "query",
+            description: "Expansión relacional (ej. user)",
+            schema: { type: "string", example: "user" },
+          },
+        ],
         responses: {
           "200": { description: "Detalle de la tarea" },
           "403": { description: "No te pertenece" },
