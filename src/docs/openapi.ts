@@ -163,6 +163,41 @@ export const openApiSpec = {
         },
       },
     },
+    "/api/sessions/me": {
+      get: {
+        summary: "Listar sesiones activas del usuario actual",
+        description:
+          "Devuelve todos los dispositivos y sesiones abiertas por el usuario autenticado.",
+        security: [{ BearerAuth: [] }],
+        responses: {
+          "200": { description: "Lista de sesiones del usuario" },
+        },
+      },
+    },
+    "/api/sessions/{sessionId}": {
+      delete: {
+        summary: "Revocar sesión específica",
+        description: "Cierra la sesión indicada de forma inmediata. Solo el dueño o Admin.",
+        security: [{ BearerAuth: [] }],
+        parameters: [{ name: "sessionId", in: "path", required: true, schema: { type: "string" } }],
+        responses: {
+          "200": { description: "Sesión revocada" },
+          "403": { description: "No te pertenece" },
+          "404": { description: "Sesión no encontrada" },
+        },
+      },
+    },
+    "/api/sessions/revoke-all": {
+      post: {
+        summary: "Revocar todas las sesiones del usuario",
+        description:
+          "Invalida todas las sesiones y refresh tokens del usuario en todos los dispositivos.",
+        security: [{ BearerAuth: [] }],
+        responses: {
+          "200": { description: "Todas las sesiones han sido revocadas" },
+        },
+      },
+    },
     "/api/users": {
       get: {
         summary: "Listar usuarios (Solo Admin, Paginado)",
@@ -244,6 +279,33 @@ export const openApiSpec = {
           "404": { description: "Usuario no encontrado" },
         },
       },
+      put: {
+        summary: "Actualizar perfil de usuario",
+        description:
+          "Permite modificar nombre, email o contraseña. Solo el propio usuario o Admin.",
+        security: [{ BearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  name: { type: "string", example: "Nuevo Nombre" },
+                  email: { type: "string", format: "email" },
+                  password: { type: "string", minLength: 6 },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          "200": { description: "Perfil actualizado" },
+          "403": { description: "No tienes permiso para modificar este usuario" },
+          "404": { description: "Usuario no encontrado" },
+        },
+      },
       delete: {
         summary: "Eliminar usuario (Soft-Delete por defecto)",
         description:
@@ -264,6 +326,48 @@ export const openApiSpec = {
         },
       },
     },
+    "/api/users/{id}/block": {
+      patch: {
+        summary: "Suspender o reactivar usuario (Solo Admin)",
+        description:
+          "Bloquea o desbloquea una cuenta. Al bloquearla, revoca inmediatamente todas sus sesiones activas.",
+        security: [{ BearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["isBlocked"],
+                properties: {
+                  isBlocked: { type: "boolean" },
+                  reason: { type: "string", example: "Violación de términos del servicio" },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          "200": { description: "Estado de la cuenta actualizado" },
+          "403": { description: "Solo accesible para administradores" },
+        },
+      },
+    },
+    "/api/users/{id}/revoke-sessions": {
+      post: {
+        summary: "Revocar todas las sesiones de un usuario",
+        description:
+          "Cierra todas las sesiones activas de un usuario objetivo. Solo el usuario dueño o Admin.",
+        security: [{ BearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        responses: {
+          "200": { description: "Sesiones revocadas" },
+          "403": { description: "No autorizado" },
+        },
+      },
+    },
+
     "/api/tasks": {
       get: {
         summary: "Listar tareas del usuario autenticado (Paginado, Filtros y Soft Delete)",

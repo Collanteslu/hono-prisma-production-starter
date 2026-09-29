@@ -109,7 +109,13 @@ describe("Authentication & Session API", () => {
     });
     expect(listRes.status).toBe(403);
 
-    // 3. Attempt to modify admin account
+    // 3. Attempt to inspect admin account (with or without includes)
+    const getOtherRes = await app.request("/api/users/user-1?include=sessions,tasks", {
+      headers: { Authorization: `Bearer ${userToken}` },
+    });
+    expect(getOtherRes.status).toBe(403);
+
+    // 4. Attempt to modify admin account
     const putRes = await app.request("/api/users/user-1", {
       method: "PUT",
       headers: {

@@ -40,10 +40,13 @@ COPY --chown=node:node package*.json ./
 COPY --chown=node:node prisma.config.ts ./
 COPY --chown=node:node prisma ./prisma/
 COPY --chown=node:node docker-entrypoint.sh ./
+RUN chmod +x docker-entrypoint.sh
 
-# Instalar dependencias de producción (incluye prisma para ejecutar db push en el entrypoint)
+# Instalar dependencias de producción (deshabilitando prepare/husky en entorno CI/Docker)
 USER node
-RUN npm ci --omit=dev
+ENV HUSKY=0
+RUN npm ci --omit=dev --ignore-scripts
+
 
 # Copiar el código compilado y el cliente generado de Prisma
 COPY --chown=node:node --from=builder /app/dist ./dist

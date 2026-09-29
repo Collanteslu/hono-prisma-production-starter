@@ -28,6 +28,8 @@ const envSchema = z.object({
     .string()
     .optional()
     .transform((val) => val === "true" || val === "1"),
+  ADMIN_EMAIL: z.string().email().optional(),
+  ADMIN_PASSWORD: z.string().min(8).optional(),
 });
 
 const parsedEnv = envSchema.safeParse(process.env);

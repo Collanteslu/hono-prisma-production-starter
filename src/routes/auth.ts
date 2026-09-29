@@ -114,11 +114,18 @@ authRoutes.post(
   async (c) => {
     const { email, password } = c.req.valid("json");
 
+    // Dummy hash to execute constant-time bcrypt work even when user does not exist
+    const DUMMY_HASH = "$2a$10$abcdefghijklmnopqrstuvwxyzABCDEF01234567890123456789012";
+
     const user = await prisma.user.findUnique({
       where: { email: email.toLowerCase() },
     });
 
-    if (!user) {
+    // Constant-time bcrypt hash comparison (always executed to prevent timing side-channel leaks)
+    const passwordToCompare = user ? user.password : DUMMY_HASH;
+    const isValidPassword = await comparePassword(password, passwordToCompare);
+
+    if (!user || !isValidPassword) {
       return c.json(
         {
           success: false,
@@ -128,27 +135,14 @@ authRoutes.post(
       );
     }
 
-    // Verify account suspension status
+    // Verify account suspension status after password check to prevent status enumeration
     if (user.isBlocked) {
       return c.json(
         {
           success: false,
-          message: `Access denied: Account has been suspended. Reason: ${user.blockedReason || "Contact support"}.`,
+          message: "Account has been suspended. Please contact support.",
         },
         403,
-      );
-    }
-
-    // Constant-time bcrypt hash comparison
-    const isValidPassword = await comparePassword(password, user.password);
-
-    if (!isValidPassword) {
-      return c.json(
-        {
-          success: false,
-          message: "Invalid credentials (incorrect email or password)",
-        },
-        401,
       );
     }
 

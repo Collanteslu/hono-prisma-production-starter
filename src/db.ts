@@ -47,12 +47,27 @@ export const prisma = new PrismaClient({ adapter });
  * Security: Disabled in production to prevent hardcoded demo credentials.
  */
 export async function seedDatabase() {
+  const usersCount = await prisma.user.count();
+
+  // In production, optionally bootstrap the primary administrator if environment credentials are provided
   if (env.NODE_ENV === "production") {
-    logger.info("🔒 Production mode detected: Skipping demo seeder.");
+    if (usersCount === 0 && env.ADMIN_EMAIL && env.ADMIN_PASSWORD) {
+      logger.info(`👑 Bootstrapping initial production administrator: ${env.ADMIN_EMAIL}...`);
+      const hashedPassword = await hashPassword(env.ADMIN_PASSWORD);
+      await prisma.user.create({
+        data: {
+          name: "System Admin",
+          email: env.ADMIN_EMAIL.toLowerCase(),
+          password: hashedPassword,
+          role: "admin",
+        },
+      });
+      logger.info("✔ Production administrator created successfully.");
+    } else {
+      logger.info("🔒 Production mode active: Demo seeder disabled.");
+    }
     return;
   }
-
-  const usersCount = await prisma.user.count();
 
   if (usersCount === 0) {
     logger.info("🌱 Initializing database with default seeded accounts and tasks...");

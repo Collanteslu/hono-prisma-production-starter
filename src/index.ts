@@ -164,13 +164,15 @@ app.get("/", (c) => {
  * Route Module Mounting
  * -------------------------------------------------------------
  */
-// Public authentication routes and protected resource modules
+// Apply authentication middleware to protected route paths
+app.use("/api/sessions/*", authMiddleware);
+app.use("/api/users/*", authMiddleware);
+app.use("/api/tasks/*", authMiddleware);
+app.use("/api/audit-logs/*", authMiddleware);
+
+// Public authentication routes and protected resource modules chained cleanly for Hono RPC
 const routes = app
   .route("/api/auth", authRoutes)
-  .use("/api/sessions/*", authMiddleware)
-  .use("/api/users/*", authMiddleware)
-  .use("/api/tasks/*", authMiddleware)
-  .use("/api/audit-logs/*", authMiddleware)
   .route("/api/sessions", sessionRoutes)
   .route("/api/users", userRoutes)
   .route("/api/tasks", taskRoutes)
