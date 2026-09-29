@@ -100,6 +100,7 @@ export const taskQuerySchema = z.object({
   completed: z.enum(["true", "false"]).optional(),
   sortBy: z.enum(["createdAt", "title"]).default("createdAt"),
   order: z.enum(["asc", "desc"]).default("desc"),
+  include: z.string().optional(),
 });
 
 /**
@@ -113,4 +114,5 @@ export const userQuerySchema = z.object({
   isBlocked: z.enum(["true", "false"]).optional(),
   sortBy: z.enum(["createdAt", "name", "email"]).default("createdAt"),
   order: z.enum(["asc", "desc"]).default("desc"),
+  include: z.string().optional(),
 });

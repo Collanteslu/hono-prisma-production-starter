@@ -220,6 +220,23 @@ console.log(data.data[0].title);
 
 ---
 
+## 🔗 Relational Expansion (`?include=...`)
+
+Just like in NestJS / Prisma Eager Loading, endpoints support dynamic relational expansion via the `?include=` query parameter, avoiding N+1 roundtrips:
+
+- **List users with embedded tasks and active sessions:**
+  ```http
+  GET /api/users?include=tasks,sessions
+  ```
+- **List tasks with embedded user profile:**
+  ```http
+  GET /api/tasks?include=user
+  ```
+
+Supported securely via the reusable whitelist helper `src/lib/relations.ts`. Sensitive fields (such as password hashes) remain automatically sanitized.
+
+---
+
 ## 📦 Standard Response Envelope & Telemetry
 
 Following API conventions (JSON:API, RFC 7807), responses include telemetry metadata (`meta`) and standard HTTP headers (`Server-Timing`, `X-Response-Time`, `X-Request-Id`):
@@ -394,3 +411,4 @@ This repository is equipped with built-in agent **Skills** located in [`.agents/
 | **Prisma Database Ops** | [`.agents/skills/prisma-database-ops`](.agents/skills/prisma-database-ops/SKILL.md) | Runbook for schema changes, SQLite Driver Adapters, Studio inspection, and resets |
 | **Bruno API Testing** | [`.agents/skills/bruno-testing`](.agents/skills/bruno-testing/SKILL.md) | Guide for creating offline-first Git-versioned requests in Bruno with auto-token propagation |
 | **Docker Deployment** | [`.agents/skills/docker-deployment`](.agents/skills/docker-deployment/SKILL.md) | Runbook for containerization, multi-stage builds, non-root security, and SQLite backups |
+| **SQL to API Generator** | [`.agents/skills/sql-to-api-generator`](.agents/skills/sql-to-api-generator/SKILL.md) | Runbook to reverse-engineer any SQL/DDL file into full Prisma models, Zod validation, and Hono CRUD routes |
