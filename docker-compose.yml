@@ -19,6 +19,16 @@ services:
       - CORS_ORIGINS=${CORS_ORIGINS:-*}
       - ADMIN_EMAIL=${ADMIN_EMAIL:-}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+      # Opcionales: vacío = valor por defecto de la aplicación
+      - ENABLE_DOCS=${ENABLE_DOCS:-}
+      - LOG_LEVEL=${LOG_LEVEL:-}
+      - LOGIN_RATE_LIMIT_MAX=${LOGIN_RATE_LIMIT_MAX:-}
+      - REFRESH_RATE_LIMIT_MAX=${REFRESH_RATE_LIMIT_MAX:-}
+      - REGISTER_RATE_LIMIT_MAX=${REGISTER_RATE_LIMIT_MAX:-}
+      - REFRESH_REUSE_GRACE_SECONDS=${REFRESH_REUSE_GRACE_SECONDS:-}
+      # Turso/libSQL remoto (si se define, sustituye al SQLite local)
+      - TURSO_DATABASE_URL=${TURSO_DATABASE_URL:-}
+      - TURSO_AUTH_TOKEN=${TURSO_AUTH_TOKEN:-}
     volumes:
       # Volumen persistente para almacenar el archivo SQLite de producción
       - sqlite_data:/app/data
