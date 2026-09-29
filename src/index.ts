@@ -20,6 +20,7 @@ import { requestIdMiddleware } from './middleware/requestId.js';
 import { authRoutes } from './routes/auth.js';
 import { userRoutes } from './routes/users.js';
 import { taskRoutes } from './routes/tasks.js';
+import { sessionRoutes } from './routes/sessions.js';
 
 /**
  * Instancia principal de la aplicación Hono tipada con AppEnv
@@ -45,7 +46,7 @@ app.use(
   '*',
   cors({
     origin: '*',
-    allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowHeaders: ['Content-Type', 'Authorization', 'X-Request-Id']
   })
 );
@@ -107,8 +108,8 @@ app.get('/healthz', async (c) => {
 app.get('/', (c) => {
   return c.json({
     status: 'online',
-    name: 'API REST Profesional con Hono, Prisma 7 y SQLite',
-    version: '1.0.0',
+    name: 'API REST Profesional con Hono, Prisma 7, SQLite y Sesiones Activas',
+    version: '1.1.0',
     documentationUrl: '/docs',
     endpoints: {
       healthcheck: '/healthz',
@@ -118,7 +119,16 @@ app.get('/', (c) => {
         refresh: 'POST /api/auth/refresh',
         logout: 'POST /api/auth/logout'
       },
-      users: 'GET, POST, PUT, DELETE /api/users',
+      sessions: {
+        mySessions: 'GET /api/sessions/me',
+        revokeSession: 'DELETE /api/sessions/:sessionId',
+        revokeAll: 'POST /api/sessions/revoke-all'
+      },
+      users: {
+        crud: 'GET, POST, PUT, DELETE /api/users',
+        blockUser: 'PATCH /api/users/:id/block',
+        revokeAllUserSessions: 'POST /api/users/:id/revoke-sessions'
+      },
       tasks: 'GET, POST, PUT, DELETE /api/tasks'
     }
   });
@@ -132,10 +142,12 @@ app.get('/', (c) => {
 // Rutas públicas de autenticación
 app.route('/api/auth', authRoutes);
 
-// Protección con autenticación JWT para usuarios y tareas
+// Protección con autenticación JWT con Stateful Session Check
+app.use('/api/sessions/*', authMiddleware);
 app.use('/api/users/*', authMiddleware);
 app.use('/api/tasks/*', authMiddleware);
 
+app.route('/api/sessions', sessionRoutes);
 app.route('/api/users', userRoutes);
 app.route('/api/tasks', taskRoutes);
 

@@ -8,23 +8,39 @@ generator client {
 }
 
 model User {
-  id        String   @id @default(uuid())
-  name      String
-  email     String   @unique
-  password  String
-  role      String   @default("user") // "admin" | "user"
-  createdAt DateTime @default(now())
+  id            String   @id @default(uuid())
+  name          String
+  email         String   @unique
+  password      String
+  role          String   @default("user") // "admin" | "user"
+  isBlocked     Boolean  @default(false)
+  blockedReason String?
+  createdAt     DateTime @default(now())
 
-  // Relación: Un usuario puede tener muchas tareas
+  // Relaciones
   tasks         Task[]
-  // Relación: Sesiones con Refresh Tokens activos
   refreshTokens RefreshToken[]
+  sessions      Session[]
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  userId    String
+  userAgent String?
+  ipAddress String?
+  isActive  Boolean  @default(true)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model RefreshToken {
   id        String   @id @default(uuid())
   token     String   @unique
   userId    String
+  sessionId String?
   expiresAt DateTime
   createdAt DateTime @default(now())
 
@@ -39,6 +55,5 @@ model Task {
   completed   Boolean  @default(false)
   createdAt   DateTime @default(now())
 
-  // Relación de clave foránea hacia User
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }

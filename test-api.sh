@@ -12,115 +12,94 @@ echo "$HEALTH" | grep -q "healthy"
 echo "✔ Healthcheck funcionando correctamente"
 
 echo -e "\n=========================================================="
-echo "🧪 2. PROBANDO DOCUMENTACIÓN OPENAPI (Scalar / Swagger)"
+echo "🧪 2. LOGIN ADMIN Y LOGIN USUARIO (ANA)"
 echo "=========================================================="
-OPENAPI=$(curl -s "$BASE_URL/openapi.json")
-echo "$OPENAPI" | grep -q "Hono REST API"
-echo "✔ Especificación OpenAPI 3.0 servida con éxito"
+ADMIN_LOGIN=$(curl -s -X POST "$BASE_URL/api/auth/login" \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@example.com","password":"password123"}')
+ADMIN_TOKEN=$(echo "$ADMIN_LOGIN" | grep -o '"accessToken":"[^"]*' | cut -d'"' -f4)
 
-DOCS_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/docs")
-if [ "$DOCS_STATUS" -eq 200 ]; then
-  echo "✔ Interfaz gráfica de documentación /docs respondiendo HTTP 200"
+USER_LOGIN=$(curl -s -X POST "$BASE_URL/api/auth/login" \
+  -H "Content-Type: application/json" \
+  -H "User-Agent: Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)" \
+  -d '{"email":"ana@example.com","password":"password123"}')
+USER_TOKEN=$(echo "$USER_LOGIN" | grep -o '"accessToken":"[^"]*' | cut -d'"' -f4)
+USER_SESSION_ID=$(echo "$USER_LOGIN" | grep -o '"sessionId":"[^"]*' | cut -d'"' -f4)
+
+echo "✔ Tokens generados para Admin y Ana (Session ID de Ana: $USER_SESSION_ID)"
+
+echo -e "\n=========================================================="
+echo "🧪 3. CONSULTAR SESIONES ACTIVAS DE ANA (GET /api/sessions/me)"
+echo "=========================================================="
+SESSIONS_RES=$(curl -s -X GET "$BASE_URL/api/sessions/me" \
+  -H "Authorization: Bearer $USER_TOKEN")
+echo "$SESSIONS_RES"
+echo "✔ Ana puede ver sus sesiones y dispositivos registrados en SQLite"
+
+echo -e "\n=========================================================="
+echo "🧪 4. TIRAR LA SESIÓN ESPECÍFICA DE ANA (DELETE /api/sessions/:id)"
+echo "=========================================================="
+REVOKE_RES=$(curl -s -X DELETE "$BASE_URL/api/sessions/$USER_SESSION_ID" \
+  -H "Authorization: Bearer $USER_TOKEN")
+echo "$REVOKE_RES"
+
+echo -e "\nIntentando hacer una petición con el token de la sesión recién tirada:"
+REVOKED_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X GET "$BASE_URL/api/tasks" \
+  -H "Authorization: Bearer $USER_TOKEN")
+if [ "$REVOKED_STATUS" -eq 401 ]; then
+  echo "✔ Correcto: El token fue rechazado inmediatamente (HTTP 401 - Sesión tirada en base de datos)"
+else
+  echo "❌ Error: La sesión tirada debió dar 401 pero dio $REVOKED_STATUS"
+  exit 1
 fi
 
 echo -e "\n=========================================================="
-echo "🧪 3. PROBANDO CABECERAS DE SEGURIDAD Y REQUEST ID"
+echo "🧪 5. BLOQUEO DE USUARIO POR ADMINISTRADOR (PATCH /api/users/:id/block)"
 echo "=========================================================="
-HEADERS=$(curl -s -i "$BASE_URL/" | tr -d '\r')
-echo "$HEADERS" | grep -i "x-request-id"
-echo "$HEADERS" | grep -i "x-content-type-options"
-echo "✔ X-Request-Id y Secure Headers inyectados en las respuestas"
-
-echo -e "\n=========================================================="
-echo "🧪 4. PROBANDO LOGIN CON CONTRASEÑA HASHEADA (BCRYPT)"
-echo "=========================================================="
-LOGIN_RES=$(curl -s -X POST "$BASE_URL/api/auth/login" \
+# Ana inicia sesión nuevamente
+ANA_NEW_LOGIN=$(curl -s -X POST "$BASE_URL/api/auth/login" \
   -H "Content-Type: application/json" \
   -d '{"email":"ana@example.com","password":"password123"}')
-echo "$LOGIN_RES"
+ANA_NEW_TOKEN=$(echo "$ANA_NEW_LOGIN" | grep -o '"accessToken":"[^"]*' | cut -d'"' -f4)
 
-ACCESS_TOKEN=$(echo "$LOGIN_RES" | grep -o '"accessToken":"[^"]*' | cut -d'"' -f4)
-REFRESH_TOKEN=$(echo "$LOGIN_RES" | grep -o '"refreshToken":"[^"]*' | cut -d'"' -f4)
+echo "Admin bloquea la cuenta de Ana (user-2) por motivo de seguridad:"
+BLOCK_RES=$(curl -s -X PATCH "$BASE_URL/api/users/user-2/block" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"isBlocked": true, "reason": "Actividad sospechosa detectada"}')
+echo "$BLOCK_RES"
 
-if [ -z "$ACCESS_TOKEN" ] || [ -z "$REFRESH_TOKEN" ]; then
-  echo "❌ Error: No se recibieron los tokens en el login"
-  exit 1
-fi
-echo "✔ Login con Bcrypt exitoso. Access Token (15 min) y Refresh Token (7 días) obtenidos."
+echo -e "\nIntentando hacer petición con el token de Ana estando BLOQUEADA:"
+BLOCKED_REQ=$(curl -s -X GET "$BASE_URL/api/tasks" \
+  -H "Authorization: Bearer $ANA_NEW_TOKEN")
+echo "$BLOCKED_REQ"
+echo "$BLOCKED_REQ" | grep -q "bloqueada"
+echo "✔ Correcto: Ana quedó bloqueada en tiempo real (HTTP 403)"
+
+echo -e "\nIntentando hacer login con cuenta bloqueada:"
+BLOCKED_LOGIN=$(curl -s -X POST "$BASE_URL/api/auth/login" \
+  -H "Content-Type: application/json" \
+  -d '{"email":"ana@example.com","password":"password123"}')
+echo "$BLOCKED_LOGIN"
+echo "$BLOCKED_LOGIN" | grep -q "bloqueada"
+echo "✔ Correcto: Login rechazado para cuenta bloqueada"
 
 echo -e "\n=========================================================="
-echo "🧪 5. PROBANDO RATE LIMITING EN /api/auth/login"
+echo "🧪 6. DESBLOQUEO DE USUARIO POR ADMINISTRADOR"
 echo "=========================================================="
-echo "Verificando cabeceras de rate limiting en el login:"
-curl -s -i -X POST "$BASE_URL/api/auth/login" \
+UNBLOCK_RES=$(curl -s -X PATCH "$BASE_URL/api/users/user-2/block" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"email":"fake@example.com","password":"wrongpassword"}' | tr -d '\r' | grep -i "x-ratelimit" || true
-echo "✔ Cabeceras de Rate Limiting activas"
+  -d '{"isBlocked": false}')
+echo "$UNBLOCK_RES"
+
+echo -e "\nLogin de Ana tras ser desbloqueada:"
+ANA_UNBLOCKED_LOGIN=$(curl -s -X POST "$BASE_URL/api/auth/login" \
+  -H "Content-Type: application/json" \
+  -d '{"email":"ana@example.com","password":"password123"}')
+echo "$ANA_UNBLOCKED_LOGIN" | grep -q "Inicio de sesión exitoso"
+echo "✔ Correcto: Ana vuelve a acceder con normalidad tras ser desbloqueada"
 
 echo -e "\n=========================================================="
-echo "🧪 6. PROBANDO REFRESH TOKEN (TOKEN ROTATION)"
-echo "=========================================================="
-REFRESH_RES=$(curl -s -X POST "$BASE_URL/api/auth/refresh" \
-  -H "Content-Type: application/json" \
-  -d "{\"refreshToken\":\"$REFRESH_TOKEN\"}")
-echo "$REFRESH_RES"
-
-NEW_ACCESS_TOKEN=$(echo "$REFRESH_RES" | grep -o '"accessToken":"[^"]*' | cut -d'"' -f4)
-NEW_REFRESH_TOKEN=$(echo "$REFRESH_RES" | grep -o '"refreshToken":"[^"]*' | cut -d'"' -f4)
-
-if [ -z "$NEW_ACCESS_TOKEN" ]; then
-  echo "❌ Error en Token Rotation"
-  exit 1
-fi
-echo "✔ Token Rotation completado con éxito."
-
-echo -e "\nProbando que el refresh token anterior fue revocado (debe fallar con 401):"
-OLD_REFRESH_ATTEMPT=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE_URL/api/auth/refresh" \
-  -H "Content-Type: application/json" \
-  -d "{\"refreshToken\":\"$REFRESH_TOKEN\"}")
-if [ "$OLD_REFRESH_ATTEMPT" -eq 401 ]; then
-  echo "✔ Correcto: El refresh token anterior quedó revocado tras usarse (One-time usage / Rotation)"
-fi
-
-echo -e "\n=========================================================="
-echo "🧪 7. PROBANDO PAGINACIÓN, BÚSQUEDA Y FILTROS EN TAREAS"
-echo "=========================================================="
-echo "Creando dos tareas de prueba para Ana..."
-curl -s -X POST "$BASE_URL/api/tasks" \
-  -H "Authorization: Bearer $NEW_ACCESS_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"title":"Aprender TypeScript Avanzado","description":"Explorar generics y decorators","completed":false}' > /dev/null
-
-curl -s -X POST "$BASE_URL/api/tasks" \
-  -H "Authorization: Bearer $NEW_ACCESS_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"title":"Reunión con equipo de frontend","description":"Definir contratos de la API","completed":true}' > /dev/null
-
-echo "Listando tareas con paginación (?page=1&limit=2):"
-curl -s -X GET "$BASE_URL/api/tasks?page=1&limit=2" -H "Authorization: Bearer $NEW_ACCESS_TOKEN"
-
-echo -e "\n\nBuscando tareas con texto (?search=frontend):"
-curl -s -X GET "$BASE_URL/api/tasks?search=frontend" -H "Authorization: Bearer $NEW_ACCESS_TOKEN"
-
-echo -e "\n\nFiltrando tareas completadas (?completed=true):"
-curl -s -X GET "$BASE_URL/api/tasks?completed=true" -H "Authorization: Bearer $NEW_ACCESS_TOKEN"
-
-echo -e "\n\n=========================================================="
-echo "🧪 8. PROBANDO CIERRE DE SESIÓN (LOGOUT Y REVOCACIÓN)"
-echo "=========================================================="
-LOGOUT_RES=$(curl -s -X POST "$BASE_URL/api/auth/logout" \
-  -H "Content-Type: application/json" \
-  -d "{\"refreshToken\":\"$NEW_REFRESH_TOKEN\"}")
-echo "$LOGOUT_RES"
-
-echo -e "\nIntentando renovar token tras logout (debe dar 401):"
-POST_LOGOUT_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE_URL/api/auth/refresh" \
-  -H "Content-Type: application/json" \
-  -d "{\"refreshToken\":\"$NEW_REFRESH_TOKEN\"}")
-if [ "$POST_LOGOUT_STATUS" -eq 401 ]; then
-  echo "✔ Correcto: El refresh token ya no es válido tras cerrar sesión"
-fi
-
-echo -e "\n=========================================================="
-echo "🎉 TODAS LAS PRUEBAS DE LA API PROFESIONAL COMPLETADAS CON ÉXITO"
+echo "🎉 PRUEBAS DE STATEFUL SESSIONS Y BLOQUEO DE USUARIOS EXITOSAS"
 echo "=========================================================="

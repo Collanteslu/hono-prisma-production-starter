@@ -23,7 +23,15 @@ export const refreshTokenSchema = z.object({
  * Esquema para cerrar sesión (Logout).
  */
 export const logoutSchema = z.object({
-  refreshToken: z.string({ required_error: 'El refreshToken es obligatorio para revocar la sesión' })
+  refreshToken: z.string().optional()
+});
+
+/**
+ * Esquema para bloquear o desbloquear un usuario.
+ */
+export const blockUserSchema = z.object({
+  isBlocked: z.boolean({ required_error: 'El campo isBlocked (true/false) es obligatorio' }),
+  reason: z.string().max(255).optional()
 });
 
 /**
@@ -97,6 +105,7 @@ export const userQuerySchema = z.object({
   limit: z.coerce.number().min(1).max(100).default(10),
   search: z.string().optional(),
   role: z.enum(['admin', 'user']).optional(),
+  isBlocked: z.enum(['true', 'false']).optional(),
   sortBy: z.enum(['createdAt', 'name', 'email']).default('createdAt'),
   order: z.enum(['asc', 'desc']).default('desc')
 });

@@ -7,6 +7,21 @@ export interface User {
   email: string;
   password: string;
   role: string;
+  isBlocked: boolean;
+  blockedReason?: string | null;
+  createdAt: string;
+}
+
+/**
+ * Definición del modelo de Sesión.
+ */
+export interface Session {
+  id: string;
+  userId: string;
+  userAgent?: string | null;
+  ipAddress?: string | null;
+  isActive: boolean;
+  expiresAt: string;
   createdAt: string;
 }
 
@@ -24,9 +39,11 @@ export interface Task {
 
 /**
  * Payload que se guarda y extrae del token JWT.
+ * Incluye sessionId (jti) para validar el estado activo en base de datos.
  */
 export interface JwtPayload {
   userId: string;
+  sessionId: string;
   email: string;
   role: 'admin' | 'user';
   exp: number;
