@@ -3,32 +3,51 @@
  * @description Audit logs query endpoints (restricted to admin users).
  */
 
-import { Hono } from "hono";
+import { createRoute, z } from "@hono/zod-openapi";
 import { prisma } from "../db.js";
 import type { AuditLogWhereInput } from "../generated/client/models.js";
 import { parseAuditDetails } from "../lib/audit.js";
+import { createRouter, errorResponses, jsonResponse, secured } from "../lib/openapi.js";
 import { buildPagination, successResponse } from "../lib/response.js";
 import { requireAdmin } from "../middleware/auth.js";
-import type { AppEnv } from "../types/index.js";
+import { auditQuerySchema } from "../schemas/index.js";
+import { auditLogSchema, successSchema } from "../schemas/responses.js";
 
-export const auditRoutes = new Hono<AppEnv>();
+export const auditRoutes = createRouter();
+
+const listRoute = createRoute({
+  method: "get",
+  path: "/",
+  tags: ["Audit"],
+  summary: "Consultar registros de auditoría (Solo Admin)",
+  description:
+    "Acciones registradas: LOGIN, LOGIN_FAILED, LOGOUT, REGISTER, CREATE, UPDATE, PASSWORD_CHANGE, SOFT_DELETE, RESTORE, DELETE_PERMANENT, BLOCK, UNBLOCK, REVOKE_SESSION, REVOKE_ALL_SESSIONS, TOKEN_REUSE_DETECTED.",
+  security: secured,
+  middleware: [requireAdmin] as const,
+  request: { query: auditQuerySchema },
+  responses: {
+    200: jsonResponse(successSchema(z.array(auditLogSchema)), "Eventos de auditoría"),
+    ...errorResponses({
+      400: "Parámetros inválidos",
+      401: "Token ausente, inválido o sesión revocada",
+      403: "Requiere rol administrador",
+    }),
+  },
+});
 
 /**
  * GET /api/audit-logs
  * Retrieves security and action audit logs (Admin only).
  */
-auditRoutes.get("/", requireAdmin, async (c) => {
-  const page = Math.max(1, Number(c.req.query("page")) || 1);
-  const limit = Math.min(100, Math.max(1, Number(c.req.query("limit")) || 20));
+auditRoutes.openapi(listRoute, async (c) => {
+  const query = c.req.valid("query");
+  const { page, limit } = query;
   const skip = (page - 1) * limit;
-  const entity = c.req.query("entity");
-  const action = c.req.query("action");
-  const userId = c.req.query("userId");
 
   const where: AuditLogWhereInput = {};
-  if (entity) where.entity = entity;
-  if (action) where.action = action;
-  if (userId) where.userId = userId;
+  if (query.entity) where.entity = query.entity;
+  if (query.action) where.action = query.action;
+  if (query.userId) where.userId = query.userId;
 
   const [total, logs] = await Promise.all([
     prisma.auditLog.count({ where }),

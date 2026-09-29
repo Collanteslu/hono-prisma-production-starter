@@ -4,16 +4,22 @@
  * Includes database-persisted session tracking and brute-force protection via rate limiting.
  */
 
-import { Hono } from "hono";
+import { createRoute } from "@hono/zod-openapi";
 import { verify } from "hono/jwt";
 import { env } from "../config/env.js";
 import { prisma } from "../db.js";
 import { recordAudit } from "../lib/audit.js";
 import { getClientIp } from "../lib/clientIp.js";
+import { createRouter, errorResponses, jsonBody, jsonResponse } from "../lib/openapi.js";
 import { buildMeta, errorResponse, successResponse } from "../lib/response.js";
-import { validate } from "../lib/validator.js";
 import { createLoginLockout, rateLimiter } from "../middleware/rateLimit.js";
 import { loginSchema, logoutSchema, refreshTokenSchema, registerSchema } from "../schemas/index.js";
+import {
+  loginResponseSchema,
+  refreshResponseSchema,
+  successSchema,
+  userSchema,
+} from "../schemas/responses.js";
 import {
   createSessionAndTokens,
   hashToken,
@@ -21,10 +27,9 @@ import {
   revokeSession,
   rotateRefreshToken,
 } from "../services/sessions.js";
-import type { AppEnv } from "../types/index.js";
 import { comparePassword, getDummyHash, hashPassword } from "../utils/password.js";
 
-export const authRoutes = new Hono<AppEnv>();
+export const authRoutes = createRouter();
 
 // Per-IP rate limiting on sensitive endpoints
 authRoutes.use("/login", rateLimiter(60_000, env.LOGIN_RATE_LIMIT_MAX));
@@ -34,44 +39,74 @@ authRoutes.use("/register", rateLimiter(60 * 60_000, env.REGISTER_RATE_LIMIT_MAX
 // Per-account lockout: 5 failed passwords lock the account for 15 minutes
 const loginLockout = createLoginLockout();
 
+const registerRoute = createRoute({
+  method: "post",
+  path: "/register",
+  tags: ["Auth"],
+  summary: "Registro público de cuentas",
+  description:
+    "Crea una cuenta con rol `user` (cualquier `role` enviado se ignora). Rate limit por IP (5/hora por defecto).",
+  request: jsonBody(registerSchema),
+  responses: {
+    201: jsonResponse(successSchema(userSchema), "Cuenta creada"),
+    ...errorResponses({
+      400: "Error de validación",
+      409: "Email duplicado",
+      429: "Rate limit excedido",
+    }),
+  },
+});
+
 /**
  * POST /api/auth/register
  * Public self-service registration. Accounts are always created with the "user" role.
  */
-authRoutes.post(
-  "/register",
-  validate("json", registerSchema, "Validation error when registering account"),
-  async (c) => {
-    const { name, email, password } = c.req.valid("json");
+authRoutes.openapi(registerRoute, async (c) => {
+  const { name, email, password } = c.req.valid("json");
 
-    const existing = await prisma.user.findUnique({ where: { email }, select: { id: true } });
-    if (existing) {
-      return errorResponse(c, `Email '${email}' is already registered.`, 409);
-    }
+  const existing = await prisma.user.findUnique({ where: { email }, select: { id: true } });
+  if (existing) {
+    return errorResponse(c, `Email '${email}' is already registered.`, 409);
+  }
 
-    const newUser = await prisma.user.create({
-      data: { name, email, password: await hashPassword(password), role: "user" },
-    });
+  const newUser = await prisma.user.create({
+    data: { name, email, password: await hashPassword(password), role: "user" },
+  });
 
-    await recordAudit(c, {
-      userId: newUser.id,
-      action: "REGISTER",
-      entity: "User",
-      entityId: newUser.id,
-    });
+  await recordAudit(c, {
+    userId: newUser.id,
+    action: "REGISTER",
+    entity: "User",
+    entityId: newUser.id,
+  });
 
-    return successResponse(c, newUser, {
-      status: 201,
-      message: "Account registered successfully.",
-    });
+  return successResponse(c, newUser, { status: 201, message: "Account registered successfully." });
+});
+
+const loginRoute = createRoute({
+  method: "post",
+  path: "/login",
+  tags: ["Auth"],
+  summary: "Inicio de sesión (Login)",
+  description:
+    "Autentica credenciales y emite Access Token (15 min) y Refresh Token (7 días). Protegido por rate limit por IP y bloqueo por cuenta tras 5 intentos fallidos (15 min).",
+  request: jsonBody(loginSchema),
+  responses: {
+    200: jsonResponse(loginResponseSchema, "Login exitoso"),
+    ...errorResponses({
+      400: "Error de validación o JSON mal formado",
+      401: "Credenciales inválidas",
+      403: "Cuenta suspendida",
+      429: "Rate limit excedido o cuenta bloqueada temporalmente",
+    }),
   },
-);
+});
 
 /**
  * POST /api/auth/login
  * Validates user credentials, ensures account is not blocked, and establishes an active session.
  */
-authRoutes.post("/login", validate("json", loginSchema), async (c) => {
+authRoutes.openapi(loginRoute, async (c) => {
   const { email, password } = c.req.valid("json");
 
   const lockedForSeconds = loginLockout.retryAfterSeconds(email);
@@ -123,86 +158,118 @@ authRoutes.post("/login", validate("json", loginSchema), async (c) => {
     entityId: sessionData.sessionId,
   });
 
-  return c.json({
-    success: true,
-    message: "Authentication successful",
-    ...sessionData,
-    user: {
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
+  return c.json(
+    {
+      success: true as const,
+      message: "Authentication successful",
+      ...sessionData,
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+      },
+      meta: buildMeta(c),
     },
-    meta: buildMeta(c),
-  });
+    200,
+  );
+});
+
+const refreshRoute = createRoute({
+  method: "post",
+  path: "/refresh",
+  tags: ["Auth"],
+  summary: "Renovar Access Token (Token Rotation)",
+  description:
+    "Intercambia un Refresh Token válido por un nuevo par de tokens. Cada refresh token solo puede usarse una vez: reutilizarlo dentro del periodo de gracia devuelve 409 (refresh concurrente); después se considera robo y la sesión se revoca.",
+  request: jsonBody(refreshTokenSchema),
+  responses: {
+    200: jsonResponse(refreshResponseSchema, "Tokens renovados"),
+    ...errorResponses({
+      400: "Error de validación",
+      401: "Refresh token inválido, expirado, revocado o reutilizado",
+      403: "Cuenta suspendida o eliminada",
+      409: "El token ya fue rotado por una petición concurrente",
+      429: "Rate limit excedido",
+    }),
+  },
 });
 
 /**
  * POST /api/auth/refresh
  * Exchanges a valid Refresh Token for a new token pair using Token Rotation.
  */
-authRoutes.post(
-  "/refresh",
-  validate("json", refreshTokenSchema, "Missing or invalid refresh token payload"),
-  async (c) => {
-    const { refreshToken } = c.req.valid("json");
+authRoutes.openapi(refreshRoute, async (c) => {
+  const { refreshToken } = c.req.valid("json");
 
-    let payload: RefreshTokenPayload;
-    try {
-      payload = (await verify(
-        refreshToken,
-        env.JWT_REFRESH_SECRET,
-        "HS256",
-      )) as unknown as RefreshTokenPayload;
-    } catch {
-      return errorResponse(c, "Corrupted or invalid refresh token.", 401);
-    }
+  let payload: RefreshTokenPayload;
+  try {
+    payload = (await verify(
+      refreshToken,
+      env.JWT_REFRESH_SECRET,
+      "HS256",
+    )) as unknown as RefreshTokenPayload;
+  } catch {
+    return errorResponse(c, "Corrupted or invalid refresh token.", 401);
+  }
 
-    const result = await rotateRefreshToken(refreshToken, payload);
+  const result = await rotateRefreshToken(refreshToken, payload);
 
-    switch (result.status) {
-      case "rotated":
-        return c.json({
-          success: true,
+  switch (result.status) {
+    case "rotated":
+      return c.json(
+        {
+          success: true as const,
           message: "Tokens renewed successfully (Token Rotation)",
           ...result.tokens,
           meta: buildMeta(c),
-        });
-      case "invalid_account":
-        return errorResponse(
-          c,
-          "Access denied: Account does not exist or has been suspended.",
-          403,
-        );
-      case "session_inactive":
-        return errorResponse(c, "Session has been revoked or expired. Please sign in again.", 401);
-      case "concurrent":
-        return errorResponse(
-          c,
-          "Refresh token was already rotated by a concurrent request. Use the most recent token pair.",
-          409,
-        );
-      case "reused":
-        await recordAudit(c, {
-          userId: payload.userId,
-          action: "TOKEN_REUSE_DETECTED",
-          entity: "Session",
-          entityId: payload.sessionId ?? null,
-        });
-        return errorResponse(
-          c,
-          "Security alert: Refresh token has already been used or revoked. Session terminated.",
-          401,
-        );
-    }
+        },
+        200,
+      );
+    case "invalid_account":
+      return errorResponse(c, "Access denied: Account does not exist or has been suspended.", 403);
+    case "session_inactive":
+      return errorResponse(c, "Session has been revoked or expired. Please sign in again.", 401);
+    case "concurrent":
+      return errorResponse(
+        c,
+        "Refresh token was already rotated by a concurrent request. Use the most recent token pair.",
+        409,
+      );
+    case "reused":
+      await recordAudit(c, {
+        userId: payload.userId,
+        action: "TOKEN_REUSE_DETECTED",
+        entity: "Session",
+        entityId: payload.sessionId ?? null,
+      });
+      return errorResponse(
+        c,
+        "Security alert: Refresh token has already been used or revoked. Session terminated.",
+        401,
+      );
+  }
+});
+
+const logoutRoute = createRoute({
+  method: "post",
+  path: "/logout",
+  tags: ["Auth"],
+  summary: "Cierre de sesión (Logout)",
+  description:
+    "Revoca la sesión asociada al Bearer token y/o al refresh token enviado (ambos opcionales).",
+  request: jsonBody(logoutSchema),
+  responses: {
+    200: jsonResponse(successSchema(userSchema.nullable()), "Sesión revocada"),
+    ...errorResponses({ 400: "Error de validación" }),
   },
-);
+});
 
 /**
  * POST /api/auth/logout
  * Deactivates session record in SQLite and purges associated refresh tokens.
  */
-authRoutes.post("/logout", validate("json", logoutSchema), async (c) => {
+authRoutes.openapi(logoutRoute, async (c) => {
   const { refreshToken } = c.req.valid("json");
   const authHeader = c.req.header("Authorization");
   const revoked = new Map<string, string>(); // sessionId -> userId

@@ -46,7 +46,7 @@ For each table/model generated, produce:
 Follow standard CRUD architectural pattern:
 - `GET /api/<models>`: Paginated query with `where` filters, search, and dynamic `include = parseIncludes(...)`.
 - `GET /api/<models>/:id`: Single entity retrieval with `include`.
-- `POST /api/<models>`: Payload validation via `zValidator("json", ...)` and `successResponse(c, ..., { status: 201 })`.
+- `POST /api/<models>`: Payload validation via `createRoute({ request: jsonBody(schema) })` + `router.openapi(...)` and `successResponse(c, ..., { status: 201 })`.
 - `PUT /api/<models>/:id`: Entity update and 404 handling.
 - `DELETE /api/<models>/:id`: Entity deletion with cascading protection.
 

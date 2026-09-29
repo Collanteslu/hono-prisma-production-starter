@@ -65,8 +65,8 @@ hono-prisma-production-starter/
 │   ├── config/
 │   │   └── env.ts                    # Zod-validated environment variables
 │   ├── db.ts                         # Prisma 7 client & automatic seeder
-│   ├── docs/
-│   │   └── openapi.ts                # Complete OpenAPI 3.0 specification
+│   ├── lib/
+│   │   └── openapi.ts                # createRouter(), route helpers (OpenAPI generated from routes)
 │   ├── jobs/
 │   │   └── cleanup.ts                # Background routine purging expired sessions
 │   ├── middleware/
@@ -79,7 +79,8 @@ hono-prisma-production-starter/
 │   │   ├── users.ts                  # /api/users routes
 │   │   └── tasks.ts                  # /api/tasks routes
 │   ├── schemas/
-│   │   └── index.ts                  # Zod schemas for bodies and query parameters
+│   │   ├── index.ts                  # Zod request schemas (registered as OpenAPI components)
+│   │   └── responses.ts              # Zod response schemas (documented and type-checked)
 │   ├── types/
 │   │   └── index.ts                  # TypeScript interfaces and Hono AppEnv
 │   ├── utils/
@@ -156,6 +157,8 @@ The API ships with an interactive, modern web console powered by **[Scalar](http
 - **OpenAPI 3.0 JSON Spec:** [http://localhost:3011/openapi.json](http://localhost:3011/openapi.json)
 
 You can explore endpoints, inspect request and response schemas, and execute live HTTP calls with Bearer Token authorization directly from your browser.
+
+**The specification is generated from the code** (`@hono/zod-openapi` + Zod 4): each route is declared once with `createRoute`, and that single definition validates the request, types the handler and documents the endpoint. The compiler rejects handlers returning a status/body that is not declared, and `tests/openapi.test.ts` validates the spec, fails if a registered route is undocumented and checks real responses against the published schemas. See [`.agents/skills/openapi-documentation`](.agents/skills/openapi-documentation/SKILL.md).
 
 ---
 
@@ -406,6 +409,7 @@ npm run lint:fix
 - [x] Typed filters (400 on invalid input), malformed JSON handling, multi-field sorting
 - [x] Admin-only user creation, public registration, last-admin protection, password-change session revocation
 - [x] Soft-deleted task visibility and restore
+- [x] OpenAPI spec validity, no code/spec drift, and response contracts checked against schemas
 
 ---
 
