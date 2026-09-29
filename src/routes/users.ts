@@ -8,6 +8,7 @@ import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import { prisma } from "../db.js";
 import type { UserWhereInput } from "../generated/client/models.js";
+import { successResponse } from "../lib/response.js";
 import {
   blockUserSchema,
   createUserSchema,
@@ -98,11 +99,7 @@ userRoutes.get(
       hasPrevPage: page > 1,
     };
 
-    return c.json({
-      success: true,
-      pagination,
-      data: users.map(sanitizeUser),
-    });
+    return successResponse(c, users.map(sanitizeUser), { pagination });
   },
 );
 
@@ -126,10 +123,7 @@ userRoutes.get("/:id", async (c) => {
     );
   }
 
-  return c.json({
-    success: true,
-    data: sanitizeUser(user),
-  });
+  return successResponse(c, sanitizeUser(user));
 });
 
 /**
