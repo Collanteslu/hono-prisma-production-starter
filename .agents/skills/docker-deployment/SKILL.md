@@ -70,6 +70,6 @@ To restore, stop the API, copy the backup over `prod.db` in the volume, and star
 - [ ] No secrets or `.env` files are baked into image layers (`.dockerignore` excludes `.env`).
 - [ ] Production secrets live in an untracked env file or the orchestrator's secret store, not in `docker-compose.yml`.
 - [ ] `HEALTHCHECK` is defined in the `Dockerfile` (pings `/healthz`).
-- [ ] `TRUST_PROXY=true` **only** behind a trusted reverse proxy; `CORS_ORIGINS` restricted to your frontends.
+- [ ] `TRUST_PROXY=true` **only** behind a trusted reverse proxy, with `TRUST_PROXY_HOPS` equal to the number of proxies in front of the API; `CORS_ORIGINS` restricted to your frontends.
 - [ ] Memory and CPU limits are specified in your orchestrator (Kubernetes / Docker Swarm).
 - [ ] Backups of the `sqlite_data` volume are scheduled and restore-tested.

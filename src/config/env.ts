@@ -33,6 +33,9 @@ const envSchema = z
       .string()
       .optional()
       .transform((val) => val === "true" || val === "1"),
+    // Number of trusted reverse proxies in front of the API (1 = one proxy such as Traefik/Nginx;
+    // 2 = e.g. Cloudflare + Traefik). Only used when TRUST_PROXY is enabled.
+    TRUST_PROXY_HOPS: z.coerce.number().int().min(1).max(10).default(1),
     ADMIN_EMAIL: z.string().email().optional(),
     ADMIN_PASSWORD: z.string().min(8).max(72).optional(),
     // Comma-separated list of allowed CORS origins ("*" allows any origin)

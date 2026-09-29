@@ -1,13 +1,16 @@
 #!/bin/sh
 set -e
 
-# Asegurar que el directorio de la base de datos existe si es una ruta local
-if [ -n "$DATABASE_URL" ]; then
-  DB_DIR=$(echo "$DATABASE_URL" | sed 's|^file:||' | xargs dirname)
-  if [ -n "$DB_DIR" ] && [ "$DB_DIR" != "." ] && [ ! -d "$DB_DIR" ]; then
-    mkdir -p "$DB_DIR"
-  fi
-fi
+# Asegurar que el directorio de la base de datos existe, solo si es un fichero local
+# (con una URL remota como postgres://... no hay que crear ningún directorio)
+case "$DATABASE_URL" in
+  file:*)
+    DB_DIR=$(dirname "${DATABASE_URL#file:}")
+    if [ "$DB_DIR" != "." ]; then
+      mkdir -p "$DB_DIR"
+    fi
+    ;;
+esac
 
 # Aplicar migraciones versionadas (nunca "db push" en producción)
 echo "🚀 Aplicando migraciones de base de datos..."

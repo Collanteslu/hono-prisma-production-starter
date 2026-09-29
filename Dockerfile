@@ -30,6 +30,9 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 ENV PORT=3011
+# Default database on the persistent volume (without this the app falls back to ./dev.db,
+# outside the volume, and the data is lost on every redeploy)
+ENV DATABASE_URL=file:/app/data/prod.db
 
 RUN apk add --no-cache openssl
 

@@ -16,6 +16,7 @@ services:
       - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET:?Define JWT_REFRESH_SECRET en el entorno o en .env}
       - DATABASE_URL=file:/app/data/prod.db
       - TRUST_PROXY=${TRUST_PROXY:-false}
+      - TRUST_PROXY_HOPS=${TRUST_PROXY_HOPS:-}
       - CORS_ORIGINS=${CORS_ORIGINS:-*}
       - ADMIN_EMAIL=${ADMIN_EMAIL:-}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
