@@ -1,3 +1,9 @@
+/**
+ * @file users.ts
+ * @description User account management routes including CRUD operations, pagination,
+ * real-time account blocking, and bulk session revocation.
+ */
+
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { prisma } from '../db.js';
@@ -7,6 +13,9 @@ import { hashPassword } from '../utils/password.js';
 
 export const userRoutes = new Hono<AppEnv>();
 
+/**
+ * Sanitizes user entity by removing sensitive fields (password hash) before client serialization.
+ */
 function sanitizeUser(user: {
   id: string;
   name: string;
@@ -29,7 +38,7 @@ function sanitizeUser(user: {
 
 /**
  * GET /api/users
- * Lista usuarios con paginación, filtros de rol y bloqueo, y búsqueda.
+ * Returns a paginated list of users with search and filtering capabilities.
  */
 userRoutes.get(
   '/',
@@ -38,7 +47,7 @@ userRoutes.get(
       return c.json(
         {
           success: false,
-          message: 'Parámetros de consulta inválidos',
+          message: 'Invalid query parameters for users list',
           errors: result.error.flatten().fieldErrors
         },
         400
@@ -96,7 +105,7 @@ userRoutes.get(
 
 /**
  * GET /api/users/:id
- * Detalle de un usuario específico.
+ * Fetches user profile details by ID.
  */
 userRoutes.get('/:id', async (c) => {
   const id = c.req.param('id');
@@ -108,7 +117,7 @@ userRoutes.get('/:id', async (c) => {
     return c.json(
       {
         success: false,
-        message: `Usuario con id '${id}' no encontrado.`
+        message: `User with ID '${id}' not found.`
       },
       404
     );
@@ -122,7 +131,7 @@ userRoutes.get('/:id', async (c) => {
 
 /**
  * POST /api/users
- * Crea un nuevo usuario.
+ * Creates a new user with bcrypt-hashed credentials.
  */
 userRoutes.post(
   '/',
@@ -131,7 +140,7 @@ userRoutes.post(
       return c.json(
         {
           success: false,
-          message: 'Error de validación al crear usuario',
+          message: 'Validation error when creating user',
           errors: result.error.flatten().fieldErrors
         },
         400
@@ -149,7 +158,7 @@ userRoutes.post(
       return c.json(
         {
           success: false,
-          message: `El email '${email}' ya se encuentra registrado.`
+          message: `Email '${email}' is already registered.`
         },
         409
       );
@@ -173,7 +182,7 @@ userRoutes.post(
     return c.json(
       {
         success: true,
-        message: 'Usuario creado exitosamente con contraseña segura.',
+        message: 'User created successfully with hashed credentials.',
         data: sanitizeUser(newUser)
       },
       201
@@ -183,9 +192,8 @@ userRoutes.post(
 
 /**
  * PATCH /api/users/:id/block
- * Endpoint para BLOQUEAR o DESBLOQUEAR un usuario.
- * Solo administradores pueden ejecutar esta acción.
- * Si se bloquea al usuario, se tiran automáticamente todas sus sesiones activas de inmediato.
+ * Suspends or reactivates a user account (Admin only).
+ * If suspended, all active sessions and refresh tokens are terminated immediately.
  */
 userRoutes.patch(
   '/:id/block',
@@ -194,7 +202,7 @@ userRoutes.patch(
       return c.json(
         {
           success: false,
-          message: 'Error de validación en la acción de bloqueo',
+          message: 'Validation error in block user payload',
           errors: result.error.flatten().fieldErrors
         },
         400
@@ -205,23 +213,21 @@ userRoutes.patch(
     const id = c.req.param('id');
     const currentUser = c.get('user');
 
-    // Control de rol: Solo administradores pueden bloquear
     if (currentUser.role !== 'admin') {
       return c.json(
         {
           success: false,
-          message: 'Acceso denegado: Solo administradores pueden bloquear o desbloquear usuarios.'
+          message: 'Access denied: Only administrators can suspend or reactivate users.'
         },
         403
       );
     }
 
-    // No permitir que el admin se auto-bloquee por accidente
     if (currentUser.userId === id) {
       return c.json(
         {
           success: false,
-          message: 'Acción inválida: No puedes bloquear tu propia cuenta de administrador.'
+          message: 'Invalid action: Administrators cannot suspend their own account.'
         },
         400
       );
@@ -235,7 +241,7 @@ userRoutes.patch(
       return c.json(
         {
           success: false,
-          message: `Usuario con id '${id}' no encontrado.`
+          message: `User with ID '${id}' not found.`
         },
         404
       );
@@ -243,16 +249,15 @@ userRoutes.patch(
 
     const { isBlocked, reason } = c.req.valid('json');
 
-    // 1. Actualizar el estado de bloqueo en la base de datos
     const updatedUser = await prisma.user.update({
       where: { id },
       data: {
         isBlocked,
-        blockedReason: isBlocked ? (reason || 'Bloqueado por el administrador') : null
+        blockedReason: isBlocked ? (reason || 'Suspended by administrator') : null
       }
     });
 
-    // 2. Si fue bloqueado, TIRAR INMEDIATAMENTE todas sus sesiones y refresh tokens
+    // Terminate all active sessions immediately upon suspension
     let revokedSessionsCount = 0;
     if (isBlocked) {
       const res = await prisma.session.updateMany({
@@ -269,8 +274,8 @@ userRoutes.patch(
     return c.json({
       success: true,
       message: isBlocked
-        ? `Usuario '${updatedUser.name}' ha sido bloqueado exitosamente y se tiraron sus ${revokedSessionsCount} sesión(es) activas.`
-        : `Usuario '${updatedUser.name}' ha sido desbloqueado exitosamente.`,
+        ? `User '${updatedUser.name}' has been suspended and ${revokedSessionsCount} active session(s) terminated.`
+        : `User '${updatedUser.name}' has been reactivated successfully.`,
       data: sanitizeUser(updatedUser)
     });
   }
@@ -278,7 +283,7 @@ userRoutes.patch(
 
 /**
  * POST /api/users/:id/revoke-sessions
- * Permite a un administrador o al propio usuario tirar todas las sesiones activas de un usuario.
+ * Revokes all active sessions for a target user (User self-service or Admin).
  */
 userRoutes.post('/:id/revoke-sessions', async (c) => {
   const id = c.req.param('id');
@@ -288,7 +293,7 @@ userRoutes.post('/:id/revoke-sessions', async (c) => {
     return c.json(
       {
         success: false,
-        message: 'Acceso denegado: Solo puedes revocar tus propias sesiones o ser administrador.'
+        message: 'Access denied: You can only revoke your own sessions unless you are an administrator.'
       },
       403
     );
@@ -305,13 +310,13 @@ userRoutes.post('/:id/revoke-sessions', async (c) => {
 
   return c.json({
     success: true,
-    message: `Se han cerrado y revocado ${res.count} sesión(es) activas del usuario.`
+    message: `Revoked ${res.count} active session(s) for user.`
   });
 });
 
 /**
  * PUT /api/users/:id
- * Actualiza los datos de un usuario existente.
+ * Updates user profile information.
  */
 userRoutes.put(
   '/:id',
@@ -320,7 +325,7 @@ userRoutes.put(
       return c.json(
         {
           success: false,
-          message: 'Error de validación al actualizar usuario',
+          message: 'Validation error when updating user',
           errors: result.error.flatten().fieldErrors
         },
         400
@@ -338,7 +343,7 @@ userRoutes.put(
       return c.json(
         {
           success: false,
-          message: `Usuario con id '${id}' no encontrado.`
+          message: `User with ID '${id}' not found.`
         },
         404
       );
@@ -354,7 +359,7 @@ userRoutes.put(
         return c.json(
           {
             success: false,
-            message: `El email '${email}' ya está en uso por otro usuario.`
+            message: `Email '${email}' is already in use by another account.`
           },
           409
         );
@@ -377,7 +382,7 @@ userRoutes.put(
 
     return c.json({
       success: true,
-      message: 'Usuario actualizado correctamente.',
+      message: 'User profile updated successfully.',
       data: sanitizeUser(updatedUser)
     });
   }
@@ -385,7 +390,7 @@ userRoutes.put(
 
 /**
  * DELETE /api/users/:id
- * Elimina un usuario y borra en cascada sus tareas, sesiones y refresh tokens.
+ * Deletes a user account with cascading deletion across tasks and sessions.
  */
 userRoutes.delete('/:id', async (c) => {
   const id = c.req.param('id');
@@ -398,7 +403,7 @@ userRoutes.delete('/:id', async (c) => {
     return c.json(
       {
         success: false,
-        message: `Usuario con id '${id}' no encontrado.`
+        message: `User with ID '${id}' not found.`
       },
       404
     );
@@ -412,7 +417,7 @@ userRoutes.delete('/:id', async (c) => {
 
   return c.json({
     success: true,
-    message: `Usuario '${existingUser.name}' eliminado con éxito, junto a sus ${tasksCount} tarea(s) asociadas.`,
+    message: `User '${existingUser.name}' and ${tasksCount} associated task(s) deleted successfully.`,
     data: sanitizeUser(existingUser)
   });
 });

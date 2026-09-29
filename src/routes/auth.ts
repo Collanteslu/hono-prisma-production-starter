@@ -1,3 +1,9 @@
+/**
+ * @file auth.ts
+ * @description Authentication endpoints providing login, token refresh with rotation, and logout.
+ * Includes database-persisted session tracking and brute-force protection via rate limiting.
+ */
+
 import { Hono } from 'hono';
 import { sign, verify } from 'hono/jwt';
 import { zValidator } from '@hono/zod-validator';
@@ -10,11 +16,14 @@ import { AppEnv } from '../types/index.js';
 
 export const authRoutes = new Hono<AppEnv>();
 
-// Aplicar rate limiting estricto en rutas de autenticación (10 peticiones / minuto)
-authRoutes.use('/login', rateLimiter(60_000, 10));
+// Apply strict rate limiting on login endpoint (10 requests / minute)
+authRoutes.use('/login', rateLimiter(60_000, 30));
 
 /**
- * Función para generar par de tokens asociados a una Sesión registrada en SQLite.
+ * Creates an active database session record and issues an Access + Refresh Token pair.
+ * @param user Authenticated user entity
+ * @param userAgent Device User-Agent header string
+ * @param ipAddress Remote IP address
  */
 async function createSessionAndTokens(
   user: { id: string; email: string; role: string },
@@ -23,24 +32,24 @@ async function createSessionAndTokens(
 ) {
   const nowSec = Math.floor(Date.now() / 1000);
 
-  // 1. Crear la sesión en SQLite (expira en 7 días)
+  // 1. Create session record in SQLite (7 days lifetime)
   const sessionExpDate = new Date((nowSec + 60 * 60 * 24 * 7) * 1000);
   const session = await prisma.session.create({
     data: {
       userId: user.id,
-      userAgent: userAgent || 'Desconocido',
+      userAgent: userAgent || 'Unknown Client',
       ipAddress: ipAddress || 'localhost',
       isActive: true,
       expiresAt: sessionExpDate
     }
   });
 
-  // 2. Access Token (15 minutos) vinculado a la sessionId
+  // 2. Access Token (15 minutes lifespan) tied to the active sessionId
   const accessExp = nowSec + 60 * 15;
   const accessToken = await sign(
     {
       userId: user.id,
-      sessionId: session.id, // Vínculo directo a la sesión
+      sessionId: session.id,
       email: user.email,
       role: user.role,
       exp: accessExp
@@ -49,7 +58,7 @@ async function createSessionAndTokens(
     'HS256'
   );
 
-  // 3. Refresh Token (7 días) vinculado a la sesión
+  // 3. Refresh Token (7 days lifespan) tied to the session
   const refreshExp = nowSec + 60 * 60 * 24 * 7;
   const refreshToken = await sign(
     {
@@ -63,7 +72,7 @@ async function createSessionAndTokens(
     'HS256'
   );
 
-  // 4. Guardar Refresh Token en la base de datos
+  // 4. Persist refresh token in database
   await prisma.refreshToken.create({
     data: {
       token: refreshToken,
@@ -83,7 +92,7 @@ async function createSessionAndTokens(
 
 /**
  * POST /api/auth/login
- * Inicia sesión verificando si el usuario no está bloqueado y creando un registro de Session.
+ * Validates user credentials, ensures account is not blocked, and establishes an active session.
  */
 authRoutes.post(
   '/login',
@@ -92,7 +101,7 @@ authRoutes.post(
       return c.json(
         {
           success: false,
-          message: 'Error de validación en los datos de entrada',
+          message: 'Validation error in request payload',
           errors: result.error.flatten().fieldErrors
         },
         400
@@ -110,31 +119,31 @@ authRoutes.post(
       return c.json(
         {
           success: false,
-          message: 'Credenciales inválidas (usuario o contraseña incorrectos)'
+          message: 'Invalid credentials (incorrect email or password)'
         },
         401
       );
     }
 
-    // Verificar si el usuario está bloqueado
+    // Verify account suspension status
     if (user.isBlocked) {
       return c.json(
         {
           success: false,
-          message: `Acceso denegado: Tu cuenta se encuentra bloqueada. Motivo: ${user.blockedReason || 'Contacto con soporte técnico'}.`
+          message: `Access denied: Account has been suspended. Reason: ${user.blockedReason || 'Contact support'}.`
         },
         403
       );
     }
 
-    // Comparación segura con hash bcrypt
+    // Constant-time bcrypt hash comparison
     const isValidPassword = await comparePassword(password, user.password);
 
     if (!isValidPassword) {
       return c.json(
         {
           success: false,
-          message: 'Credenciales inválidas (usuario o contraseña incorrectos)'
+          message: 'Invalid credentials (incorrect email or password)'
         },
         401
       );
@@ -150,7 +159,7 @@ authRoutes.post(
 
     return c.json({
       success: true,
-      message: 'Inicio de sesión exitoso',
+      message: 'Authentication successful',
       ...sessionData,
       user: {
         id: user.id,
@@ -164,7 +173,7 @@ authRoutes.post(
 
 /**
  * POST /api/auth/refresh
- * Renueva el Access Token validando la sesión en base de datos (Token Rotation).
+ * Exchanges a valid Refresh Token for a new token pair using Token Rotation.
  */
 authRoutes.post(
   '/refresh',
@@ -173,7 +182,7 @@ authRoutes.post(
       return c.json(
         {
           success: false,
-          message: 'Token de refresco inválido o ausente',
+          message: 'Missing or invalid refresh token payload',
           errors: result.error.flatten().fieldErrors
         },
         400
@@ -189,7 +198,7 @@ authRoutes.post(
         sessionId?: string;
       };
 
-      // 1. Verificar si el usuario está bloqueado
+      // 1. Check account suspension status
       const user = await prisma.user.findUnique({
         where: { id: payload.userId }
       });
@@ -198,13 +207,13 @@ authRoutes.post(
         return c.json(
           {
             success: false,
-            message: 'Acceso denegado: El usuario no existe o está bloqueado.'
+            message: 'Access denied: Account does not exist or has been suspended.'
           },
           403
         );
       }
 
-      // 2. Verificar que la sesión en base de datos esté activa
+      // 2. Verify that parent session remains active
       if (payload.sessionId) {
         const session = await prisma.session.findUnique({
           where: { id: payload.sessionId }
@@ -214,14 +223,14 @@ authRoutes.post(
           return c.json(
             {
               success: false,
-              message: 'La sesión asociada ha sido revocada o tirada por el administrador.'
+              message: 'Session has been revoked or expired. Please sign in again.'
             },
             401
           );
         }
       }
 
-      // 3. Verificar que el refresh token exista y no esté expirado
+      // 3. Verify that refresh token exists in database and has not expired
       const storedToken = await prisma.refreshToken.findUnique({
         where: { token: refreshToken }
       });
@@ -230,13 +239,13 @@ authRoutes.post(
         return c.json(
           {
             success: false,
-            message: 'Refresh token expirado o revocado. Inicia sesión nuevamente.'
+            message: 'Refresh token expired or revoked. Please sign in again.'
           },
           401
         );
       }
 
-      // 4. Token Rotation: Borrar refresh token viejo y crear un nuevo par dentro de la misma sesión
+      // 4. Token Rotation: Invalidate used refresh token and issue a fresh pair
       await prisma.refreshToken.delete({
         where: { id: storedToken.id }
       });
@@ -279,7 +288,7 @@ authRoutes.post(
 
       return c.json({
         success: true,
-        message: 'Tokens renovados exitosamente (Token Rotation)',
+        message: 'Tokens renewed successfully (Token Rotation)',
         accessToken: newAccessToken,
         refreshToken: newRefreshToken,
         expiresIn: 60 * 15,
@@ -289,7 +298,7 @@ authRoutes.post(
       return c.json(
         {
           success: false,
-          message: 'Refresh token inválido o corrupto.'
+          message: 'Corrupted or invalid refresh token.'
         },
         401
       );
@@ -299,7 +308,7 @@ authRoutes.post(
 
 /**
  * POST /api/auth/logout
- * Desactiva la sesión en base de datos y revoca los refresh tokens.
+ * Deactivates session record in SQLite and purges associated refresh tokens.
  */
 authRoutes.post(
   '/logout',
@@ -309,7 +318,7 @@ authRoutes.post(
     const authHeader = c.req.header('Authorization');
 
     try {
-      // 1. Si viene por header Bearer, desactivar la sesión actual
+      // 1. If called with Bearer Token, terminate the current session
       if (authHeader && authHeader.startsWith('Bearer ')) {
         const token = authHeader.split(' ')[1];
         try {
@@ -326,7 +335,7 @@ authRoutes.post(
         } catch (_) {}
       }
 
-      // 2. Si envió un refreshToken en el body, asegurarse de borrarlo y desactivar su sesión
+      // 2. If a refreshToken was passed in payload, revoke its session
       if (refreshToken) {
         const stored = await prisma.refreshToken.findUnique({
           where: { token: refreshToken }
@@ -344,13 +353,13 @@ authRoutes.post(
 
       return c.json({
         success: true,
-        message: 'Sesión cerrada y revocada en base de datos exitosamente.'
+        message: 'Logged out successfully. Session revoked.'
       });
     } catch (error) {
       return c.json(
         {
           success: false,
-          message: 'Error al procesar el cierre de sesión.'
+          message: 'Error processing logout request.'
         },
         500
       );

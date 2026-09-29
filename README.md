@@ -1,306 +1,306 @@
-#  API REST Profesional: Hono, Prisma 7, SQLite, Zod & JWT
+# ⚡ Hono + Prisma 7 (SQLite) Production REST API Starter Template
 
-> **API REST moderna y robusta de nivel de producción** construida con **TypeScript** sobre el framework ultrarrápido **[Hono](https://hono.dev/)**, persistencia con **[Prisma 7](https://www.prisma.io/)** (utilizando SQLite local), validación con **[Zod](https://zod.dev/)**, hasheo con **[Bcrypt](https://github.com/dcodeIO/bcrypt.js)**, **Sesiones Stateful con control de expulsión y bloqueo en tiempo real**, **Rate Limiting** y documentación interactiva generada con **[Scalar OpenAPI](https://scalar.com/)**.
+[![CI & Typecheck](https://github.com/your-username/hono-prisma-production-starter/actions/workflows/ci.yml/badge.svg)](https://github.com/your-username/hono-prisma-production-starter/actions)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Hono](https://img.shields.io/badge/Hono-v4-E36002.svg)](https://hono.dev/)
+[![Prisma](https://img.shields.io/badge/Prisma-v7-2D3748.svg)](https://www.prisma.io/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-Strict-blue.svg)](https://www.typescriptlang.org/)
+[![OpenAPI / Scalar](https://img.shields.io/badge/Docs-Scalar%20OpenAPI-6366f1.svg)](https://scalar.com/)
 
----
-
-## 📑 Tabla de Contenidos
-1. [Características Principales](#-características-principales)
-2. [Arquitectura y Estructura del Código](#-arquitectura-y-estructura-del-código)
-3. [Requisitos y Puesta en Marcha](#-requisitos-y-puesta-en-marcha)
-4. [Documentación Interactiva (Scalar OpenAPI)](#-documentación-interactiva-scalar-openapi)
-5. [Pruebas con Bruno API Client](#-pruebas-con-bruno-api-client)
-6. [Seguridad y Gestión de Sesiones](#-seguridad-y-gestión-de-sesiones)
-7. [Referencia de Endpoints](#-referencia-de-endpoints)
-8. [Pruebas Automatizadas](#-pruebas-automatizadas)
+> **A production-ready, batteries-included REST API GitHub template** built with **TypeScript**, **[Hono](https://hono.dev/)**, **[Prisma 7](https://www.prisma.io/)** (embedded SQLite via LibSQL Driver Adapter), **[Zod](https://zod.dev/)**, **Bcrypt**, **Stateful Sessions with real-time revocation and user blocking**, **Rate Limiting**, **Graceful Shutdown**, **Docker containerization**, and interactive **[Scalar OpenAPI](https://scalar.com/)** documentation.
 
 ---
 
-## 🚀 Características Principales
+## 🎯 Why Use This Template?
 
-- ⚡ **Rendimiento de Próxima Generación**: Desarrollada sobre **Hono** con `@hono/node-server`.
-- 🗄️ **Persistencia con Prisma 7 & Driver Adapters**: Motor SQLite local (`dev.db`) con `@prisma/adapter-libsql` de alto rendimiento, migraciones limpias y borrado en cascada (`onDelete: Cascade`).
-- 🔐 **Autenticación Híbrida & Stateful Sessions**:
-  - **Access Token (15 min)**: JWT firmado con `HS256`.
-  - **Refresh Token (7 días)**: Con **Token Rotation** (un solo uso por token).
-  - **Persistencia de Sesiones**: Registro en SQLite de IP, User-Agent y estado activo (`isActive`).
-  - **Expulsión Inmediata y Bloqueo**: Un administrador puede suspender a un usuario o tirar una sesión específica; la invalidación ocurre **en tiempo real** sin esperar a que expire el JWT.
-  - **Hasheo Seguro**: Contraseñas cifradas con `bcryptjs` (10 rondas de salt).
-- 🛡️ **Defensa en Profundidad**:
-  - **Rate Limiting**: Mitigación de ataques de fuerza bruta en `/api/auth/login` (10 req/min por IP con cabeceras `X-RateLimit-*`).
-  - **Secure Headers**: Protección nativa contra XSS, Clickjacking, MIME-sniffing y política HSTS.
-  - **Trazabilidad (Request ID)**: Inyección automática de `X-Request-Id` (UUID v4) en cada petición.
-  - **Control de Pertenencia (Ownership)**: Un usuario estándar solo puede consultar, editar o borrar sus propias tareas.
-- 📋 **Paginación, Filtros y Búsqueda**: Parámetros tipados (`page`, `limit`, `search`, `completed`, `order`) con metadatos de respuesta (`totalPages`, `total`, `hasNextPage`).
-- 🩺 **Observabilidad**: Endpoint `/healthz` con diagnóstico profundo y medición en milisegundos de la latencia hacia SQLite.
+Starting a backend project often requires reimplementing the same boilerplate: authentication, password hashing, session revocation, input validation, rate limiting, and database models.
+
+This template gives you an **opinionated, robust, production-grade foundation**:
+- **Zero External Dependencies to Run**: Uses embedded SQLite with Prisma 7 Driver Adapters. Anyone can clone and run it instantly without configuring Docker, PostgreSQL, or Redis.
+- **Enterprise-Grade Authentication**: Access Tokens (15 min) + Refresh Tokens (7 days) with **Token Rotation** and **Stateful Session tracking** in SQLite.
+- **Instant Revocation & Real-Time Suspension**: Suspend accounts or revoke active sessions immediately; requests are rejected in real-time without waiting for JWT expiration.
+- **Strict User Ownership**: Standard users can only interact with tasks they own.
+- **OpenAPI 3.0 & Swagger/Scalar Included**: Interactive web documentation served out-of-the-box at `/docs`.
+- **Git-Integrated API Testing**: Full collection included for **[Bruno API Client](https://www.usebruno.com/)** with automated token propagation.
 
 ---
 
-## 🏗️ Arquitectura y Estructura del Código
+## 📑 Table of Contents
+1. [Architecture & Project Structure](#-architecture--project-structure)
+2. [Quickstart (3 Steps)](#-quickstart-in-3-steps)
+3. [Using as a GitHub Template](#-using-as-a-github-template)
+4. [Interactive API Documentation (Scalar)](#-interactive-api-documentation-scalar)
+5. [Testing with Bruno API Client](#-testing-with-bruno-api-client)
+6. [Stateful Sessions & Security Model](#-stateful-sessions--security-model)
+7. [Endpoints Reference](#-endpoints-reference)
+8. [Automated Test Suite](#-automated-test-suite)
+9. [Docker Deployment](#-docker-deployment)
+10. [Contributing & Development Guidelines](#-contributing--development-guidelines)
+11. [License](#-license)
+
+---
+
+## 🏗️ Architecture & Project Structure
 
 ```text
-hono-test/
-├── .env                              # Configuración local (puerto 3011, secretos)
-├── .env.example                      # Plantilla para entornos de producción
-├── prisma.config.ts                  # Configuración de Prisma 7
+hono-prisma-production-starter/
+├── .env                              # Local environment variables
+├── .env.example                      # Production environment template
+├── .github/
+│   ├── workflows/ci.yml              # GitHub Actions CI (Typechecking & Build)
+│   ├── ISSUE_TEMPLATE/               # Bug report & feature request forms
+│   └── PULL_REQUEST_TEMPLATE.md      # Standard PR checklist
+├── prisma.config.ts                  # Prisma 7 configuration file
 ├── prisma/
-│   └── schema.prisma                 # Modelos: User, Session, RefreshToken y Task
-├── bruno/                            # Colección lista para Bruno API Client
-│   ├── bruno.json                    # Manifiesto de la colección
-│   ├── collection.bru                # Header global Authorization Bearer
-│   ├── environments/                 # Variables de entorno (Local.bru)
+│   └── schema.prisma                 # Domain models: User, Session, RefreshToken, Task
+├── bruno/                            # Complete collection for Bruno API Client
+│   ├── bruno.json                    # Bruno collection metadata
+│   ├── collection.bru                # Global Authorization Bearer header
+│   ├── environments/Local.bru        # Local environment variables (baseUrl, token)
 │   ├── Auth/                         # Login Admin, Login User, Refresh, Logout
-│   ├── Sessions/                     # Listar mis sesiones, tirar sesión, tirar todas
-│   ├── Users/                        # CRUD paginado, Bloquear/Desbloquear usuario
-│   └── Tasks/                        # CRUD paginado y filtrado de tareas
+│   ├── Sessions/                     # List sessions, Revoke session, Revoke all
+│   ├── Users/                        # Paginated user CRUD, Block / Unblock user
+│   └── Tasks/                        # Paginated & filtered task CRUD
 ├── src/
 │   ├── config/
-│   │   └── env.ts                    # Validación de variables de entorno con Zod
-│   ├── db.ts                         # Cliente Prisma 7 (libsql) y seeder inicial
+│   │   └── env.ts                    # Zod-validated environment variables
+│   ├── db.ts                         # Prisma 7 client & automatic seeder
 │   ├── docs/
-│   │   └── openapi.ts                # Especificación OpenAPI 3.0 completa
+│   │   └── openapi.ts                # Complete OpenAPI 3.0 specification
+│   ├── jobs/
+│   │   └── cleanup.ts                # Background routine purging expired sessions
 │   ├── middleware/
-│   │   ├── auth.ts                   # Stateful Session Check & Bloqueo en tiempo real
-│   │   ├── rateLimit.ts              # Limitador de peticiones por IP
-│   │   └── requestId.ts              # Inyección y propagación de X-Request-Id
+│   │   ├── auth.ts                   # Stateful session & real-time block check
+│   │   ├── rateLimit.ts              # IP-based rate limiter middleware
+│   │   └── requestId.ts              # Tracing header (X-Request-Id)
 │   ├── routes/
-│   │   ├── auth.ts                   # /api/auth (Login, Refresh, Logout)
-│   │   ├── sessions.ts               # /api/sessions (Gestión de sesiones activas)
-│   │   ├── users.ts                  # /api/users (CRUD de usuarios y bloqueo)
-│   │   └── tasks.ts                  # /api/tasks (CRUD de tareas con ownership)
+│   │   ├── auth.ts                   # /api/auth routes
+│   │   ├── sessions.ts               # /api/sessions routes
+│   │   ├── users.ts                  # /api/users routes
+│   │   └── tasks.ts                  # /api/tasks routes
 │   ├── schemas/
-│   │   └── index.ts                  # Esquemas Zod para bodies y query params
+│   │   └── index.ts                  # Zod schemas for bodies and query parameters
 │   ├── types/
-│   │   └── index.ts                  # Definiciones de tipos e interfaces TypeScript
+│   │   └── index.ts                  # TypeScript interfaces and Hono AppEnv
 │   ├── utils/
-│   │   └── password.ts               # Hasheo y verificación segura con Bcrypt
-│   └── index.ts                      # Punto de entrada principal y middlewares globales
-├── test-api.sh                       # Suite de pruebas automatizadas con curl
-└── README.md
+│   │   └── password.ts               # Bcrypt password hashing utilities
+│   └── index.ts                      # Main entrypoint, global middlewares & shutdown
+├── test-api.sh                       # End-to-end bash test suite
+├── Dockerfile                        # Multi-stage production container
+├── docker-compose.yml                # Production Compose configuration
+└── LICENSE                           # MIT License
 ```
 
 ---
 
-## ⚙️ Requisitos y Puesta en Marcha
+## ⚡ Quickstart in 3 Steps
 
-### Requisitos Previos
-- **Node.js** (v18.14.0 o superior, probado en Node v24).
-- **npm** (v9 o superior).
+### Prerequisites
+- **Node.js** v18.14.0 or higher (Tested on Node v20 & v24)
+- **npm** v9 or higher
 
-### 1. Clonar e Instalar Dependencias
 ```bash
-git clone <url-del-repositorio>
-cd hono-test
+# 1. Clone or generate your repository
+git clone https://github.com/your-username/your-repo-name.git
+cd your-repo-name
+
+# 2. Install dependencies & initialize SQLite database
 npm install
-```
-
-### 2. Variables de Entorno
-Copia la plantilla de variables de entorno:
-```bash
-cp .env.example .env
-```
-*(El archivo `.env` ya viene preconfigurado con el puerto `3011` y secretos seguros).*
-
-### 3. Sincronizar Base de Datos SQLite
-```bash
 npx prisma db push
-```
 
-### 4. Iniciar el Servidor en Desarrollo
-```bash
+# 3. Start development server with hot-reload
 npm run dev
 ```
 
-El servidor estará escuchando en:
+The API will be running on:
 ```text
 http://localhost:3011
 ```
 
-*(En el primer arranque, `seedDatabase()` poblará automáticamente la base de datos con usuarios y tareas de prueba con contraseñas hasheadas).*
+*(On first startup, default demo accounts and tasks are automatically seeded into SQLite with bcrypt-hashed passwords).*
 
 ---
 
-## 📖 Documentación Interactiva (Scalar OpenAPI)
+## 📋 Using as a GitHub Template
 
-La API cuenta con una interfaz gráfica interactiva moderna para explorar y probar endpoints directamente desde el navegador, generada mediante **[Scalar](https://scalar.com/)**:
-
-- **URL de la Documentación:** [http://localhost:3011/docs](http://localhost:3011/docs)
-- **Especificación OpenAPI (JSON):** [http://localhost:3011/openapi.json](http://localhost:3011/openapi.json)
-
-Desde esta consola web puedes:
-1. Probar cualquier llamada HTTP (`GET`, `POST`, `PUT`, `PATCH`, `DELETE`).
-2. Configurar el botón **Authorize** pegando tu token JWT para probar endpoints privados.
-3. Inspeccionar esquemas de datos, validaciones y códigos de estado HTTP.
+1. Click the green **"Use this template"** button at the top of the repository in GitHub.
+2. Choose **"Create a new repository"**.
+3. Name your repository and clone it to your local machine.
+4. Update `package.json` with your project's name and details.
+5. You now have a complete, secure API architecture ready to build features upon.
 
 ---
 
-## 🐶 Pruebas con Bruno API Client
+## 📖 Interactive API Documentation (Scalar)
 
-### ¿Qué es Bruno?
-**[Bruno](https://www.usebruno.com/)** es un cliente API de código abierto, rápido y moderno, diseñado como una alternativa ligera y privada a herramientas como Postman o Insomnia. 
+The API ships with an interactive, modern web console powered by **[Scalar](https://scalar.com/)**:
 
-A diferencia de Postman:
-- Guarda las colecciones como archivos de texto plano legibles (`.bru`) directamente dentro del repositorio del proyecto.
-- No almacena tus datos en la nube ni requiere crear una cuenta obligatoria.
-- Permite versionar peticiones, headers y scripts en Git junto al código fuente.
+- **Interactive API Console:** [http://localhost:3011/docs](http://localhost:3011/docs)
+- **OpenAPI 3.0 JSON Spec:** [http://localhost:3011/openapi.json](http://localhost:3011/openapi.json)
 
-> 🌐 **Descarga e información oficial:**  
-> - Sitio Web Oficial: [https://www.usebruno.com/](https://www.usebruno.com/)  
-> - Documentación de Bruno: [https://docs.usebruno.com/](https://docs.usebruno.com/)
+You can explore endpoints, inspect request and response schemas, and execute live HTTP calls with Bearer Token authorization directly from your browser.
 
 ---
 
-### Cómo abrir y usar la colección de este proyecto en Bruno
+## 🐶 Testing with Bruno API Client
 
-1. Abre la aplicación **Bruno** en tu ordenador.
-2. Haz clic en **Open Collection**.
-3. Selecciona la carpeta `bruno/` ubicada en la raíz de este proyecto (`/hono-test/bruno`).
-4. En la esquina superior derecha de Bruno, selecciona el entorno **`Local`** (configurado en `http://localhost:3011`).
-5. **Flujo de prueba recomendado en Bruno:**
-   - Abre la carpeta **`Auth`** y pulsa **Send** en `Login Admin` o `Login User`.  
-     *(Un script post-response guardará automáticamente el `token`, `refreshToken` y `sessionId` en las variables de Bruno).*
-   - Ve a la carpeta **`Tasks`** o **`Users`** y ejecuta cualquier petición: el header `Authorization: Bearer {{token}}` ya está configurado a nivel de colección y se enviará de forma automática.
-   - Ve a la carpeta **`Sessions`** para consultar tus sesiones activas (`My Sessions`), tirar una sesión o revocarlas todas.
+### What is Bruno?
+**[Bruno](https://www.usebruno.com/)** is an open-source, lightweight, fast API client built as a modern, offline-first alternative to Postman and Insomnia.
+- **Git-Friendly**: Collections are stored as human-readable `.bru` plain-text files inside your repository.
+- **No Cloud Required**: Your requests, headers, and secrets remain 100% on your local machine.
+
+> 🌐 **Official Links:**  
+> - Official Website: [https://www.usebruno.com/](https://www.usebruno.com/)  
+> - Documentation: [https://docs.usebruno.com/](https://docs.usebruno.com/)
+
+### How to use the included collection
+1. Open **Bruno**.
+2. Click **Open Collection** and select the [`bruno/`](bruno/) folder in the repository.
+3. Select the **`Local`** environment from the top-right environment picker.
+4. Run `Login Admin` or `Login User` under `Auth/`:
+   - An automated post-response script stores the `token`, `refreshToken`, and `sessionId` into your environment.
+   - All subsequent calls in `Tasks/`, `Users/`, and `Sessions/` automatically send the `Authorization: Bearer {{token}}` header.
 
 ---
 
-## 🛡️ Seguridad y Gestión de Sesiones
+## 🛡️ Stateful Sessions & Security Model
 
-### Control de Sesiones en Base de Datos (Stateful Session Check)
-A diferencia del JWT tradicional (que no puede ser revocado hasta que vence el tiempo `exp`), cada llamada a un endpoint privado consulta SQLite para verificar:
-1. **Estado del Usuario**: Si el usuario ha sido marcado como `isBlocked: true`, se rechaza la petición al instante con **HTTP 403 Forbidden**.
-2. **Estado de la Sesión**: Si la sesión ha sido tirada (`isActive: false`), se rechaza de inmediato con **HTTP 401 Unauthorized**.
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client
+    participant Hono as Hono Router & Auth Middleware
+    participant SQLite as SQLite Database (Prisma 7)
 
-### Credenciales Preconfiguradas para Pruebas
+    Client->>Hono: POST /api/auth/login { email, password }
+    Hono->>SQLite: Verify credentials (bcrypt) & create Session
+    SQLite-->>Hono: Session created (ID, UserAgent, IP)
+    Hono-->>Client: Returns Access Token (15m) + Refresh Token (7d)
 
-| Rol | Nombre | Email | Contraseña | Permisos |
+    Client->>Hono: GET /api/tasks (Bearer Access Token)
+    Hono->>Hono: Verify JWT signature & expiration
+    Hono->>SQLite: Check user.isBlocked === false AND session.isActive === true
+    alt User is blocked OR session is inactive
+        SQLite-->>Hono: Rejected (Blocked: 403 / Inactive: 401)
+        Hono-->>Client: Immediate Access Denied (Real-Time Revocation)
+    else Active & Valid
+        SQLite-->>Hono: OK
+        Hono->>SQLite: Fetch tasks where userId === currentUser.userId
+        SQLite-->>Hono: Return user tasks
+        Hono-->>Client: 200 OK (Paginated tasks)
+    end
+```
+
+### Pre-seeded Demo Credentials
+
+| Role | Name | Email | Password | Permissions |
 |---|---|---|---|---|
-| **Admin** | Luis Admin | `admin@example.com` | `password123` | Control total, ver todos los usuarios, bloquear cuentas y tirar sesiones ajenas |
-| **User** | Ana García | `ana@example.com` | `password123` | Gestionar exclusivamente sus propias tareas y sesiones |
+| **Admin** | Luis Admin | `admin@example.com` | `password123` | Full access, user management, account suspension, session revocation |
+| **User** | Ana García | `ana@example.com` | `password123` | Standard access, owns personal tasks and sessions |
 
 ---
 
-## 📡 Referencia de Endpoints
+## 📡 Endpoints Reference
 
-### 1. Salud del Sistema
-| Método | Endpoint | Descripción | Auth |
+### Health & Observability
+| Method | Endpoint | Description | Auth |
 |---|---|---|---|
-| `GET` | `/healthz` | Diagnóstico de uptime y latencia real a SQLite | No |
-| `GET` | `/docs` | Interfaz gráfica interactiva de documentación | No |
+| `GET` | `/healthz` | Uptime check & active SQLite query latency in ms | No |
+| `GET` | `/docs` | Interactive Scalar OpenAPI web documentation | No |
+| `GET` | `/openapi.json` | Raw OpenAPI 3.0 schema | No |
 
----
-
-### 2. Autenticación (`/api/auth`)
-| Método | Endpoint | Descripción | Rate Limit |
+### Authentication (`/api/auth`)
+| Method | Endpoint | Description | Rate Limit |
 |---|---|---|---|
-| `POST` | `/api/auth/login` | Inicia sesión, crea registro de `Session` y emite tokens | 10 req/min |
-| `POST` | `/api/auth/refresh` | Renueva el Access Token con **Token Rotation** | No |
-| `POST` | `/api/auth/logout` | Revoca la sesión en base de datos e invalida tokens | No |
+| `POST` | `/api/auth/login` | Authenticate, create database session, issue tokens | 10 req/min |
+| `POST` | `/api/auth/refresh` | Renew token pair with **Token Rotation** | No |
+| `POST` | `/api/auth/logout` | Deactivate session and revoke refresh tokens | No |
+
+### Session Management (`/api/sessions`)
+| Method | Endpoint | Description | Auth |
+|---|---|---|---|
+| `GET` | `/api/sessions/me` | List all active/inactive sessions with IP & User-Agent | Bearer |
+| `DELETE` | `/api/sessions/:sessionId` | **Revoke specific session**: Instantly kicks device | Bearer |
+| `POST` | `/api/sessions/revoke-all` | **Revoke all sessions**: Closes all active devices | Bearer |
+
+### Tasks (`/api/tasks`)
+*Strict user ownership: Authenticated users only see and manage their own tasks.*
+
+| Method | Endpoint | Description | Auth |
+|---|---|---|---|
+| `GET` | `/api/tasks` | Paginated list (`?page=1&limit=10&search=text&completed=true`) | Bearer |
+| `GET` | `/api/tasks/:id` | Get single task (403 if belonging to another user) | Bearer |
+| `POST` | `/api/tasks` | Create task (automatically assigned to token's userId) | Bearer |
+| `PUT` | `/api/tasks/:id` | Update title, description, or completed state | Bearer |
+| `DELETE` | `/api/tasks/:id` | Delete task | Bearer |
+
+### Users (`/api/users`)
+| Method | Endpoint | Description | Auth |
+|---|---|---|---|
+| `GET` | `/api/users` | Paginated users list (`?page=1&limit=10&search=ana&role=user`) | Bearer |
+| `GET` | `/api/users/:id` | Get user details | Bearer |
+| `POST` | `/api/users` | Create user with bcrypt-hashed credentials | Bearer |
+| `PUT` | `/api/users/:id` | Update user profile | Bearer |
+| `PATCH` | `/api/users/:id/block` | **Suspend / Reactivate User** *(Admin only)*: Immediately revokes all active sessions | Bearer |
+| `POST` | `/api/users/:id/revoke-sessions` | Terminate all active sessions for a target user | Bearer |
+| `DELETE` | `/api/users/:id` | Delete user (cascades tasks, sessions, and tokens) | Bearer |
 
 ---
 
-### 3. Sesiones Activas (`/api/sessions`)
-*Requiere `Authorization: Bearer <TOKEN>`*
+## 🧪 Automated Test Suite
 
-| Método | Endpoint | Descripción |
-|---|---|---|
-| `GET` | `/api/sessions/me` | Lista todas las sesiones activas/inactivas del usuario con IP y User-Agent |
-| `DELETE` | `/api/sessions/:sessionId` | **Tirar sesión específica**: Invalida de inmediato el token de ese dispositivo |
-| `POST` | `/api/sessions/revoke-all` | **Tirar todas las sesiones**: Cierra sesión en todos los dispositivos |
-
----
-
-### 4. Tareas (`/api/tasks`)
-*Requiere `Authorization: Bearer <TOKEN>` - Aislamiento estricto por usuario autenticado*
-
-| Método | Endpoint | Descripción |
-|---|---|---|
-| `GET` | `/api/tasks` | Lista paginada (`?page=1&limit=10&search=texto&completed=true`) |
-| `GET` | `/api/tasks/:id` | Detalle de una tarea (solo si le pertenece al usuario) |
-| `POST` | `/api/tasks` | Crea tarea (se asigna automáticamente al usuario del token) |
-| `PUT` | `/api/tasks/:id` | Modifica título, descripción o estado de una tarea propia |
-| `DELETE` | `/api/tasks/:id` | Elimina una tarea propia |
-
----
-
-### 5. Usuarios (`/api/users`)
-*Requiere `Authorization: Bearer <TOKEN>`*
-
-| Método | Endpoint | Descripción |
-|---|---|---|
-| `GET` | `/api/users` | Lista paginada de usuarios (`?page=1&limit=10&search=ana&role=user`) |
-| `GET` | `/api/users/:id` | Detalle de un usuario |
-| `POST` | `/api/users` | Crear nuevo usuario (hashea contraseña con bcrypt) |
-| `PUT` | `/api/users/:id` | Actualizar nombre, email o contraseña de un usuario |
-| `PATCH` | `/api/users/:id/block` | **Bloquear o desbloquear usuario** *(Admin)*: Tira todas sus sesiones al instante |
-| `POST` | `/api/users/:id/revoke-sessions` | Tirar todas las sesiones activas de un usuario concreto |
-| `DELETE` | `/api/users/:id` | Borra usuario y elimina en cascada todas sus tareas, sesiones y tokens |
-
----
-
-## 🧪 Pruebas Automatizadas
-
-El proyecto incluye el script ejecutable [`test-api.sh`](test-api.sh) que valida de extremo a extremo todo el ciclo de vida:
+Run the full end-to-end automated test suite:
 
 ```bash
-# Con el servidor corriendo en otra terminal:
+# Ensure server is running in another terminal, then execute:
 ./test-api.sh
 ```
 
-El script comprueba automáticamente:
-1. Healthcheck profundo con comprobación de conexión a SQLite.
-2. Servidor de documentación `/docs` y especificación OpenAPI.
-3. Inyección de `X-Request-Id` y cabeceras de seguridad HTTP.
-4. Login con validación Bcrypt y generación de `Session` en base de datos.
-5. Cabeceras de Rate Limiting.
-6. Consulta de sesiones activas del usuario.
-7. **Tirada de sesión específica**: Comprueba que el token es rechazado de inmediato con `401`.
-8. **Bloqueo de cuenta por Admin**: Comprueba el corte inmediato con `403` y el rechazo en futuros logins.
-9. **Desbloqueo de cuenta**: Comprueba la reactivación del acceso.
-10. Paginación, búsqueda textual y filtros en tareas.
+**Test Coverage Highlights:**
+- [x] Deep healthcheck with SQLite latency measurement
+- [x] OpenAPI specification & `/docs` availability
+- [x] `X-Request-Id` and HTTP security headers
+- [x] Bcrypt password verification during login
+- [x] IP Rate limiting headers (`X-RateLimit-*`)
+- [x] Token Rotation and one-time refresh token validation
+- [x] Active session listing and individual session termination (instant 401)
+- [x] Admin account suspension (instant 403 on existing tokens & login block)
+- [x] Account reactivation
+- [x] Task ownership enforcement, pagination, text search, and filters
 
 ---
 
-## 🛠️ Herramientas y Comandos de Utilidad
+## 🐳 Docker Deployment
+
+The template includes an optimized multi-stage `Dockerfile` (Alpine-based, non-root user) and `docker-compose.yml`:
 
 ```bash
-# Iniciar servidor en desarrollo con hot-reload
-npm run dev
-
-# Abrir panel visual de base de datos (Prisma Studio)
-npx prisma studio
-
-# Sincronizar cambios del archivo schema.prisma
-npx prisma db push
-
-# Verificar tipos de TypeScript
-npx tsc --noEmit
-```
-
----
-
-## 🐳 Despliegue con Docker y Docker Compose
-
-La API incluye un `Dockerfile` multi-etapa optimizado y un archivo `docker-compose.yml` listos para producción:
-
-```bash
-# Construir y levantar el contenedor en segundo plano
+# Build and start container in detached mode
 docker compose up -d
 
-# Ver logs del contenedor
+# View container logs
 docker compose logs -f
 
-# Detener el contenedor
+# Stop container
 docker compose down
 ```
 
-El volumen `sqlite_data` persistirá el archivo de base de datos de forma segura entre reinicios de contenedor.
+The named volume `sqlite_data` persists your SQLite database across container restarts.
 
 ---
 
-## 🧹 Rutina de Mantenimiento y Graceful Shutdown
+## 🤝 Contributing & Development Guidelines
 
-1. **Graceful Shutdown (Cierre Limpio)**:
-   - Al recibir `SIGINT` (Ctrl+C) o `SIGTERM` (Docker / Kubernetes), el servidor deja de aceptar conexiones nuevas, espera a que terminen las peticiones en vuelo y desconecta `Prisma` y SQLite de forma segura para evitar la corrupción de datos.
-2. **Rutina de Limpieza Automática (`src/jobs/cleanup.ts`)**:
-   - Cada hora, una tarea en segundo plano purga automáticamente sesiones y refresh tokens expirados o inactivos, manteniendo la base de datos ligera y rápida.
+Contributions are welcome! Please follow these steps:
+
+1. **Fork the Repository** and create a feature branch (`git checkout -b feature/amazing-feature`).
+2. **Ensure Type Safety**: Run `npm run build` to verify there are zero TypeScript errors.
+3. **Run Tests**: Verify your changes with `./test-api.sh`.
+4. **Follow Commits Conventions**: Use Conventional Commits (`feat:`, `fix:`, `docs:`, `chore:`).
+5. **Open a Pull Request**: GitHub will automatically load the [Pull Request Template](.github/PULL_REQUEST_TEMPLATE.md).
+
+---
+
+## 📄 License
+
+Distributed under the **MIT License**. See [`LICENSE`](LICENSE) for more information.

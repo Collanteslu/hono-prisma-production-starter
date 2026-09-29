@@ -1,3 +1,10 @@
+/**
+ * @file index.ts
+ * @description Main application entry point for the Hono REST API.
+ * Configures global middleware (tracing, security headers, logging, CORS), OpenAPI scalar documentation,
+ * routes mounting, error handling, background session cleanup, and graceful process shutdown.
+ */
+
 import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
 import { logger } from 'hono/logger';
@@ -6,7 +13,7 @@ import { prettyJSON } from 'hono/pretty-json';
 import { secureHeaders } from 'hono/secure-headers';
 import { apiReference } from '@scalar/hono-api-reference';
 
-// Configuración de entorno y base de datos
+// Environment configuration and database client
 import { env } from './config/env.js';
 import { prisma, seedDatabase } from './db.js';
 import { AppEnv } from './types/index.js';
@@ -17,32 +24,32 @@ import { startCleanupJob } from './jobs/cleanup.js';
 import { authMiddleware } from './middleware/auth.js';
 import { requestIdMiddleware } from './middleware/requestId.js';
 
-// Rutas
+// Route modules
 import { authRoutes } from './routes/auth.js';
 import { userRoutes } from './routes/users.js';
 import { taskRoutes } from './routes/tasks.js';
 import { sessionRoutes } from './routes/sessions.js';
 
 /**
- * Instancia principal de la aplicación Hono tipada con AppEnv
+ * Initialize main Hono application instance bound with AppEnv types
  */
 const app = new Hono<AppEnv>();
 
 /**
  * -------------------------------------------------------------
- * Middlewares Globales de Seguridad y Trazabilidad
+ * Global Middlewares (Security & Observability)
  * -------------------------------------------------------------
  */
-// 1. Trazabilidad: Asigna o propaga X-Request-Id en cada petición
+// 1. Request tracing: Generates or forwards X-Request-Id (UUID v4)
 app.use('*', requestIdMiddleware);
 
-// 2. Seguridad HTTP: Cabeceras HSTS, XSS Protection, CSP, No-Sniff, Frameguard
+// 2. HTTP Security: Injects HSTS, XSS Protection, CSP, No-Sniff, and Frameguard headers
 app.use('*', secureHeaders());
 
-// 3. Logger HTTP con tiempo de respuesta
+// 3. HTTP access logger with response time calculation
 app.use('*', logger());
 
-// 4. CORS configurado
+// 4. Cross-Origin Resource Sharing (CORS) configuration
 app.use(
   '*',
   cors({
@@ -52,18 +59,18 @@ app.use(
   })
 );
 
-// 5. Formateador JSON legible
+// 5. Formatted readable JSON output
 app.use('*', prettyJSON());
 
 /**
  * -------------------------------------------------------------
- * Documentación Interactiva OpenAPI (Scalar) & Healthcheck
+ * Interactive OpenAPI Documentation (Scalar) & Healthcheck
  * -------------------------------------------------------------
  */
-// Especificación OpenAPI en formato JSON
+// Raw OpenAPI 3.0 specification endpoint
 app.get('/openapi.json', (c) => c.json(openApiSpec));
 
-// Panel interactivo de documentación en /docs
+// Interactive web console at /docs powered by Scalar
 app.get(
   '/docs',
   apiReference({
@@ -74,7 +81,7 @@ app.get(
   })
 );
 
-// Endpoint de Healthcheck profundo (servidor + conexión a SQLite)
+// Deep Healthcheck endpoint verifying process uptime and SQLite latency
 app.get('/healthz', async (c) => {
   try {
     const startTime = Date.now();
@@ -97,7 +104,7 @@ app.get('/healthz', async (c) => {
         timestamp: new Date().toISOString(),
         database: {
           status: 'disconnected',
-          error: error instanceof Error ? error.message : 'Error al conectar a SQLite'
+          error: error instanceof Error ? error.message : 'Database connection error'
         }
       },
       503
@@ -105,11 +112,11 @@ app.get('/healthz', async (c) => {
   }
 });
 
-// Endpoint raíz de bienvenida
+// Root welcome and overview endpoint
 app.get('/', (c) => {
   return c.json({
     status: 'online',
-    name: 'API REST Profesional con Hono, Prisma 7, SQLite y Sesiones Activas',
+    name: 'Production REST API Template with Hono, Prisma 7, SQLite & Stateful Sessions',
     version: '1.2.0',
     documentationUrl: '/docs',
     endpoints: {
@@ -137,13 +144,13 @@ app.get('/', (c) => {
 
 /**
  * -------------------------------------------------------------
- * Montaje de Rutas
+ * Route Module Mounting
  * -------------------------------------------------------------
  */
-// Rutas públicas de autenticación
+// Public authentication routes
 app.route('/api/auth', authRoutes);
 
-// Protección con autenticación JWT con Stateful Session Check
+// Protected routes guarded by JWT and stateful session middleware
 app.use('/api/sessions/*', authMiddleware);
 app.use('/api/users/*', authMiddleware);
 app.use('/api/tasks/*', authMiddleware);
@@ -154,14 +161,14 @@ app.route('/api/tasks', taskRoutes);
 
 /**
  * -------------------------------------------------------------
- * Manejadores de Error y 404
+ * Error and 404 Handlers
  * -------------------------------------------------------------
  */
 app.notFound((c) => {
   return c.json(
     {
       success: false,
-      message: `Ruta no encontrada: ${c.req.method} ${c.req.url}`,
+      message: `Route not found: ${c.req.method} ${c.req.url}`,
       requestId: c.get('requestId')
     },
     404
@@ -173,7 +180,7 @@ app.onError((err, c) => {
   return c.json(
     {
       success: false,
-      message: 'Ocurrió un error interno en el servidor.',
+      message: 'Internal server error.',
       requestId: c.get('requestId'),
       error: env.NODE_ENV === 'development' ? err.message : undefined
     },
@@ -183,16 +190,16 @@ app.onError((err, c) => {
 
 /**
  * -------------------------------------------------------------
- * Inicialización del Servidor Node.js y Tareas en Segundo Plano
+ * Server Initialization and Background Jobs
  * -------------------------------------------------------------
  */
 await seedDatabase();
 
-// Iniciar rutina de limpieza periódica de sesiones obsoletas
-startCleanupJob(60 * 60 * 1000); // Cada 1 hora
+// Start recurring cleanup job to purge expired sessions every hour
+startCleanupJob(60 * 60 * 1000);
 
-console.log(` Servidor Hono listo en http://localhost:${env.PORT}`);
-console.log(` Documentación interactiva disponible en: http://localhost:${env.PORT}/docs`);
+console.log(`🚀 Hono server listening on http://localhost:${env.PORT}`);
+console.log(`📖 Interactive API documentation available at: http://localhost:${env.PORT}/docs`);
 
 const server = serve({
   fetch: app.fetch,
@@ -201,12 +208,12 @@ const server = serve({
 
 /**
  * -------------------------------------------------------------
- * Cierre Limpio (Graceful Shutdown)
+ * Graceful Process Shutdown
  * -------------------------------------------------------------
- * Captura SIGINT (Ctrl+C) y SIGTERM (despliegues/Docker) para:
- * 1. Dejar de recibir nuevas peticiones HTTP.
- * 2. Permitir que las peticiones en curso terminen de procesarse.
- * 3. Desconectar Prisma y SQLite limpiamente sin corromper la base de datos.
+ * Intercepts OS signals (SIGINT, SIGTERM) to:
+ * 1. Reject incoming requests.
+ * 2. Allow in-flight requests to complete execution.
+ * 3. Safely disconnect Prisma and close SQLite connection without data corruption.
  */
 let isShuttingDown = false;
 
@@ -214,30 +221,28 @@ const gracefulShutdown = async (signal: string) => {
   if (isShuttingDown) return;
   isShuttingDown = true;
 
-  console.log(`\n🛑 Recibida señal ${signal}. Iniciando apagado limpio (Graceful Shutdown)...`);
+  console.log(`\n🛑 Received ${signal}. Initiating graceful shutdown...`);
 
   try {
-    // Cerrar el servidor HTTP
     server.close(async () => {
-      console.log('✔ Conexiones HTTP cerradas.');
+      console.log('✔ HTTP listener closed.');
       try {
-        // Desconectar Prisma Client
         await prisma.$disconnect();
-        console.log('✔ Conexión a SQLite desconectada correctamente.');
+        console.log('✔ SQLite connection safely closed.');
         process.exit(0);
       } catch (dbErr) {
-        console.error('❌ Error al desconectar la base de datos:', dbErr);
+        console.error('❌ Error during database disconnect:', dbErr);
         process.exit(1);
       }
     });
 
-    // Timeout de seguridad forzoso de 10 segundos
+    // Forced exit timeout fallback after 10 seconds
     setTimeout(() => {
-      console.error('⚠️ Apagado forzado por superar el tiempo límite de espera.');
+      console.error('⚠️ Forcefully terminating after shutdown timeout limit.');
       process.exit(1);
     }, 10000).unref();
   } catch (err) {
-    console.error('❌ Error durante el cierre del servidor:', err);
+    console.error('❌ Error during server shutdown:', err);
     process.exit(1);
   }
 };

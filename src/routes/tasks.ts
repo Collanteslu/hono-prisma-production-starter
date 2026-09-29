@@ -1,3 +1,12 @@
+/**
+ * @file tasks.ts
+ * @description Task management CRUD routes with strict user ownership and pagination.
+ *
+ * Security Model:
+ * Standard users can ONLY read, create, update, and delete tasks they own.
+ * Any attempt to access a task belonging to another user results in HTTP 403 Forbidden.
+ */
+
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { prisma } from '../db.js';
@@ -8,14 +17,7 @@ export const taskRoutes = new Hono<AppEnv>();
 
 /**
  * GET /api/tasks
- * Lista paginada de tareas exclusivas del usuario autenticado.
- * Soporta filtros:
- *  - page: número de página (default: 1)
- *  - limit: cantidad por página (default: 10, max: 100)
- *  - search: búsqueda textual en título y descripción
- *  - completed: 'true' o 'false'
- *  - sortBy: 'createdAt' o 'title'
- *  - order: 'asc' o 'desc'
+ * Lists tasks belonging exclusively to the authenticated user with pagination and filters.
  */
 taskRoutes.get(
   '/',
@@ -24,7 +26,7 @@ taskRoutes.get(
       return c.json(
         {
           success: false,
-          message: 'Parámetros de consulta de tareas inválidos',
+          message: 'Invalid task query parameters',
           errors: result.error.flatten().fieldErrors
         },
         400
@@ -36,7 +38,7 @@ taskRoutes.get(
     const { page, limit, search, completed, sortBy, order } = c.req.valid('query');
     const skip = (page - 1) * limit;
 
-    // Filtro base: pertenencia al usuario del token
+    // Strict ownership filter: Always scope to the token's authenticated userId
     const where: any = {
       userId: currentUser.userId
     };
@@ -85,7 +87,7 @@ taskRoutes.get(
 
 /**
  * GET /api/tasks/:id
- * Obtiene una tarea por su ID solo si le pertenece al usuario del token.
+ * Retrieves a single task ensuring strict ownership validation.
  */
 taskRoutes.get('/:id', async (c) => {
   const id = c.req.param('id');
@@ -99,18 +101,18 @@ taskRoutes.get('/:id', async (c) => {
     return c.json(
       {
         success: false,
-        message: `Tarea con id '${id}' no encontrada.`
+        message: `Task with ID '${id}' not found.`
       },
       404
     );
   }
 
-  // Verificamos propiedad estricta
+  // Ownership verification
   if (task.userId !== currentUser.userId) {
     return c.json(
       {
         success: false,
-        message: 'Acceso denegado: Esta tarea no te pertenece.'
+        message: 'Access denied: You do not have permission to view this task.'
       },
       403
     );
@@ -127,7 +129,7 @@ taskRoutes.get('/:id', async (c) => {
 
 /**
  * POST /api/tasks
- * Crea una nueva tarea asignada directamente al usuario autenticado en el token.
+ * Creates a new task bound strictly to the authenticated user.
  */
 taskRoutes.post(
   '/',
@@ -136,7 +138,7 @@ taskRoutes.post(
       return c.json(
         {
           success: false,
-          message: 'Error de validación al crear tarea',
+          message: 'Validation error when creating task',
           errors: result.error.flatten().fieldErrors
         },
         400
@@ -149,7 +151,7 @@ taskRoutes.post(
 
     const newTask = await prisma.task.create({
       data: {
-        userId: currentUser.userId,
+        userId: currentUser.userId, // Secure assignment from verified token
         title,
         description: description || '',
         completed: Boolean(completed)
@@ -159,7 +161,7 @@ taskRoutes.post(
     return c.json(
       {
         success: true,
-        message: 'Tarea creada exitosamente.',
+        message: 'Task created successfully.',
         data: {
           ...newTask,
           createdAt: newTask.createdAt.toISOString()
@@ -172,7 +174,7 @@ taskRoutes.post(
 
 /**
  * PUT /api/tasks/:id
- * Actualiza una tarea únicamente si pertenece al usuario del token.
+ * Updates task properties (title, description, completed) verifying ownership.
  */
 taskRoutes.put(
   '/:id',
@@ -181,7 +183,7 @@ taskRoutes.put(
       return c.json(
         {
           success: false,
-          message: 'Error de validación al actualizar tarea',
+          message: 'Validation error when updating task',
           errors: result.error.flatten().fieldErrors
         },
         400
@@ -200,17 +202,18 @@ taskRoutes.put(
       return c.json(
         {
           success: false,
-          message: `Tarea con id '${id}' no encontrada.`
+          message: `Task with ID '${id}' not found.`
         },
         404
       );
     }
 
+    // Ownership verification
     if (existingTask.userId !== currentUser.userId) {
       return c.json(
         {
           success: false,
-          message: 'Acceso denegado: No puedes modificar tareas que no te pertenecen.'
+          message: 'Access denied: You cannot edit tasks belonging to other users.'
         },
         403
       );
@@ -229,7 +232,7 @@ taskRoutes.put(
 
     return c.json({
       success: true,
-      message: 'Tarea actualizada exitosamente.',
+      message: 'Task updated successfully.',
       data: {
         ...updatedTask,
         createdAt: updatedTask.createdAt.toISOString()
@@ -240,7 +243,7 @@ taskRoutes.put(
 
 /**
  * DELETE /api/tasks/:id
- * Elimina una tarea solo si pertenece al usuario del token.
+ * Deletes a task ensuring ownership verification.
  */
 taskRoutes.delete('/:id', async (c) => {
   const id = c.req.param('id');
@@ -254,17 +257,18 @@ taskRoutes.delete('/:id', async (c) => {
     return c.json(
       {
         success: false,
-        message: `Tarea con id '${id}' no encontrada.`
+        message: `Task with ID '${id}' not found.`
       },
       404
     );
   }
 
+  // Ownership verification
   if (existingTask.userId !== currentUser.userId) {
     return c.json(
       {
         success: false,
-        message: 'Acceso denegado: No puedes eliminar tareas que no te pertenecen.'
+        message: 'Access denied: You cannot delete tasks belonging to other users.'
       },
       403
     );
@@ -276,7 +280,7 @@ taskRoutes.delete('/:id', async (c) => {
 
   return c.json({
     success: true,
-    message: 'Tarea eliminada correctamente.',
+    message: 'Task deleted successfully.',
     data: {
       ...deletedTask,
       createdAt: deletedTask.createdAt.toISOString()

@@ -1,13 +1,21 @@
+/**
+ * @file db.ts
+ * @description Prisma Client initialization and database seeder for SQLite.
+ * Uses Prisma 7 Driver Adapters with @prisma/adapter-libsql for native SQLite performance.
+ */
+
 import path from 'node:path';
 import { PrismaClient } from './generated/client/client.js';
 import { PrismaLibSql } from '@prisma/adapter-libsql';
 import { hashPassword } from './utils/password.js';
 
-/**
- * Configuración del cliente de base de datos SQLite con Prisma 7.
- */
+/** Resolve absolute path to the local SQLite database file */
 const dbPath = path.resolve(process.cwd(), 'dev.db');
 
+/**
+ * Configure the LibSQL Driver Adapter for Prisma 7.
+ * Provides high-speed embedded execution and compatibility with edge runtimes.
+ */
 const adapter = new PrismaLibSql({
   url: `file:${dbPath}`
 });
@@ -15,18 +23,18 @@ const adapter = new PrismaLibSql({
 export const prisma = new PrismaClient({ adapter });
 
 /**
- * Función de inicialización y siembra (Seed) de datos iniciales.
- * Hashea las contraseñas de forma segura con bcrypt antes de guardarlas.
+ * Database seeder executed during application startup.
+ * Seeds initial demo accounts and tasks with hashed passwords if the database is empty.
  */
 export async function seedDatabase() {
   const usersCount = await prisma.user.count();
 
   if (usersCount === 0) {
-    console.log(' Inicializando base de datos SQLite con contraseñas hasheadas (Seed)...');
+    console.log('🌱 Initializing SQLite database with default seeded accounts and tasks...');
 
     const hashedPassword = await hashPassword('password123');
 
-    // 1. Crear Usuario Admin
+    // 1. Create Admin User
     const admin = await prisma.user.create({
       data: {
         id: 'user-1',
@@ -38,14 +46,14 @@ export async function seedDatabase() {
           create: [
             {
               id: 'task-1',
-              title: 'Aprender Hono Framework',
-              description: 'Comprender el router, middlewares y context de Hono.',
+              title: 'Learn Hono Framework',
+              description: 'Understand router, middlewares, and context in Hono.',
               completed: false
             },
             {
               id: 'task-2',
-              title: 'Configurar JWT y roles',
-              description: 'Proteger rutas privadas usando middleware de autenticación.',
+              title: 'Configure JWT and Roles',
+              description: 'Protect private routes using authentication middleware.',
               completed: true
             }
           ]
@@ -53,7 +61,7 @@ export async function seedDatabase() {
       }
     });
 
-    // 2. Crear Usuario Regular
+    // 2. Create Standard User
     const user = await prisma.user.create({
       data: {
         id: 'user-2',
@@ -65,8 +73,8 @@ export async function seedDatabase() {
           create: [
             {
               id: 'task-3',
-              title: 'Diseñar interfaz frontend',
-              description: 'Crear vistas para consumir la API de tareas y usuarios.',
+              title: 'Design Frontend UI',
+              description: 'Build web dashboard consuming the REST API.',
               completed: false
             }
           ]
@@ -74,6 +82,6 @@ export async function seedDatabase() {
       }
     });
 
-    console.log('✔ Base de datos inicializada con contraseñas seguras (Admin:', admin.email, ', User:', user.email, ')');
+    console.log(`✔ Database seeded successfully (Admin: ${admin.email}, User: ${user.email})`);
   }
 }

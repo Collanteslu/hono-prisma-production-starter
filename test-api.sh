@@ -73,7 +73,7 @@ echo -e "\nIntentando hacer petición con el token de Ana estando BLOQUEADA:"
 BLOCKED_REQ=$(curl -s -X GET "$BASE_URL/api/tasks" \
   -H "Authorization: Bearer $ANA_NEW_TOKEN")
 echo "$BLOCKED_REQ"
-echo "$BLOCKED_REQ" | grep -q "bloqueada"
+echo "$BLOCKED_REQ" | grep -qi "suspended"
 echo "✔ Correcto: Ana quedó bloqueada en tiempo real (HTTP 403)"
 
 echo -e "\nIntentando hacer login con cuenta bloqueada:"
@@ -81,7 +81,7 @@ BLOCKED_LOGIN=$(curl -s -X POST "$BASE_URL/api/auth/login" \
   -H "Content-Type: application/json" \
   -d '{"email":"ana@example.com","password":"password123"}')
 echo "$BLOCKED_LOGIN"
-echo "$BLOCKED_LOGIN" | grep -q "bloqueada"
+echo "$BLOCKED_LOGIN" | grep -qi "suspended"
 echo "✔ Correcto: Login rechazado para cuenta bloqueada"
 
 echo -e "\n=========================================================="
@@ -97,7 +97,7 @@ echo -e "\nLogin de Ana tras ser desbloqueada:"
 ANA_UNBLOCKED_LOGIN=$(curl -s -X POST "$BASE_URL/api/auth/login" \
   -H "Content-Type: application/json" \
   -d '{"email":"ana@example.com","password":"password123"}')
-echo "$ANA_UNBLOCKED_LOGIN" | grep -q "Inicio de sesión exitoso"
+echo "$ANA_UNBLOCKED_LOGIN" | grep -qi "successful"
 echo "✔ Correcto: Ana vuelve a acceder con normalidad tras ser desbloqueada"
 
 echo -e "\n=========================================================="

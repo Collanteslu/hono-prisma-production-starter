@@ -1,3 +1,10 @@
+/**
+ * @file sessions.ts
+ * @description Session management routes.
+ * Allows users to inspect all active sessions across devices, terminate specific sessions,
+ * or revoke all active sessions immediately.
+ */
+
 import { Hono } from 'hono';
 import { prisma } from '../db.js';
 import { AppEnv } from '../types/index.js';
@@ -6,7 +13,7 @@ export const sessionRoutes = new Hono<AppEnv>();
 
 /**
  * GET /api/sessions/me
- * Permite al usuario consultar todas sus sesiones (activas e inactivas).
+ * Retrieves all sessions belonging to the currently authenticated user.
  */
 sessionRoutes.get('/me', async (c) => {
   const currentUser = c.get('user');
@@ -31,7 +38,7 @@ sessionRoutes.get('/me', async (c) => {
 
 /**
  * DELETE /api/sessions/:sessionId
- * Cierra/tira una sesión específica del usuario (o cualquier sesión si es admin).
+ * Terminates a specific session. Tokens tied to this session will be rejected immediately.
  */
 sessionRoutes.delete('/:sessionId', async (c) => {
   const sessionId = c.req.param('sessionId');
@@ -45,24 +52,24 @@ sessionRoutes.delete('/:sessionId', async (c) => {
     return c.json(
       {
         success: false,
-        message: `Sesión con id '${sessionId}' no encontrada.`
+        message: `Session with ID '${sessionId}' not found.`
       },
       404
     );
   }
 
-  // Comprobar pertenencia (o ser admin)
+  // Ownership verification: Users can only revoke their own sessions (admins can revoke any)
   if (session.userId !== currentUser.userId && currentUser.role !== 'admin') {
     return c.json(
       {
         success: false,
-        message: 'Acceso denegado: No tienes permiso para tirar sesiones de otros usuarios.'
+        message: 'Access denied: You cannot terminate sessions belonging to other users.'
       },
       403
     );
   }
 
-  // Desactivar la sesión y borrar sus refresh tokens
+  // Deactivate session and purge associated refresh tokens
   await prisma.session.update({
     where: { id: sessionId },
     data: { isActive: false }
@@ -74,30 +81,28 @@ sessionRoutes.delete('/:sessionId', async (c) => {
 
   return c.json({
     success: true,
-    message: `Sesión '${sessionId}' cerrada con éxito. El token asociado ya no podrá realizar peticiones.`
+    message: `Session '${sessionId}' has been revoked successfully.`
   });
 });
 
 /**
  * POST /api/sessions/revoke-all
- * Permite al usuario tirar todas sus sesiones abiertas en otros dispositivos.
+ * Invalidates all active sessions for the current user across all devices.
  */
 sessionRoutes.post('/revoke-all', async (c) => {
   const currentUser = c.get('user');
 
-  // Desactivar todas las sesiones del usuario
   await prisma.session.updateMany({
     where: { userId: currentUser.userId, isActive: true },
     data: { isActive: false }
   });
 
-  // Eliminar todos sus refresh tokens
   await prisma.refreshToken.deleteMany({
     where: { userId: currentUser.userId }
   });
 
   return c.json({
     success: true,
-    message: 'Todas las sesiones activas han sido revocadas. Deberás volver a iniciar sesión.'
+    message: 'All active sessions have been revoked. You must log in again.'
   });
 });

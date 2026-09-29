@@ -1,15 +1,21 @@
+/**
+ * @file cleanup.ts
+ * @description Background garbage collection task that purges expired sessions and orphaned refresh tokens.
+ * Keeps the SQLite database performant and prevents storage bloat.
+ */
+
 import { prisma } from '../db.js';
 
 /**
- * Rutina para purgar sesiones y refresh tokens expirados de la base de datos SQLite.
- * Mantiene la base de datos optimizada y evita la acumulación de registros obsoletos.
+ * Executes a cleanup cycle deleting expired sessions and tokens.
+ * @returns Counts of purged database rows
  */
 export async function cleanupExpiredSessions(): Promise<{ deletedSessions: number; deletedTokens: number }> {
   try {
     const now = new Date();
 
     const [sessionsRes, tokensRes] = await Promise.all([
-      // 1. Eliminar sesiones expiradas o inactivas de más de 24h
+      // 1. Purge sessions that are either naturally expired or marked inactive for >24 hours
       prisma.session.deleteMany({
         where: {
           OR: [
@@ -21,7 +27,7 @@ export async function cleanupExpiredSessions(): Promise<{ deletedSessions: numbe
           ]
         }
       }),
-      // 2. Eliminar refresh tokens expirados
+      // 2. Purge expired refresh tokens
       prisma.refreshToken.deleteMany({
         where: {
           expiresAt: { lt: now }
@@ -31,7 +37,7 @@ export async function cleanupExpiredSessions(): Promise<{ deletedSessions: numbe
 
     if (sessionsRes.count > 0 || tokensRes.count > 0) {
       console.log(
-        `🧹 [Cleanup Routine] Purgadas ${sessionsRes.count} sesión(es) y ${tokensRes.count} token(s) expirados.`
+        `🧹 [Cleanup Routine] Purged ${sessionsRes.count} expired session(s) and ${tokensRes.count} token(s).`
       );
     }
 
@@ -40,24 +46,25 @@ export async function cleanupExpiredSessions(): Promise<{ deletedSessions: numbe
       deletedTokens: tokensRes.count
     };
   } catch (error) {
-    console.error('❌ Error en rutina de limpieza de sesiones:', error);
+    console.error('❌ Error during session cleanup routine:', error);
     return { deletedSessions: 0, deletedTokens: 0 };
   }
 }
 
 /**
- * Inicia la rutina periódica de limpieza (por defecto cada 1 hora).
+ * Schedules periodic execution of the cleanup routine.
+ * @param intervalMs Time between cycles in milliseconds (default: 1 hour)
  */
 export function startCleanupJob(intervalMs: number = 60 * 60 * 1000): NodeJS.Timeout {
-  // Ejecutar una limpieza inicial no bloqueante
+  // Run an initial non-blocking cycle on startup
   cleanupExpiredSessions();
 
-  // Programar repetición periódica
+  // Schedule recurring timer
   const timer = setInterval(() => {
     cleanupExpiredSessions();
   }, intervalMs);
 
-  // Evitar que el timer impida que Node se cierre si el proceso termina
+  // Unref timer so it does not keep the Node process alive during shutdown
   timer.unref();
 
   return timer;

@@ -1,5 +1,11 @@
 /**
- * Definición del modelo de Usuario.
+ * @file index.ts
+ * @description Core TypeScript type definitions and interfaces for domain models,
+ * JWT authentication payloads, Hono application context variables, and pagination metadata.
+ */
+
+/**
+ * User domain entity model representing application accounts.
  */
 export interface User {
   id: string;
@@ -13,7 +19,8 @@ export interface User {
 }
 
 /**
- * Definición del modelo de Sesión.
+ * Session domain entity representing active login sessions persisted in SQLite.
+ * Used for stateful session validation and real-time revocation.
  */
 export interface Session {
   id: string;
@@ -26,7 +33,7 @@ export interface Session {
 }
 
 /**
- * Definición del modelo de Tarea.
+ * Task domain entity model representing items associated with a specific User.
  */
 export interface Task {
   id: string;
@@ -38,8 +45,8 @@ export interface Task {
 }
 
 /**
- * Payload que se guarda y extrae del token JWT.
- * Incluye sessionId (jti) para validar el estado activo en base de datos.
+ * JWT payload structure signed into access and refresh tokens.
+ * Includes sessionId to enable real-time session checking against SQLite.
  */
 export interface JwtPayload {
   userId: string;
@@ -50,7 +57,7 @@ export interface JwtPayload {
 }
 
 /**
- * Tipado de las variables almacenadas en el Contexto de Hono (c.set / c.get)
+ * Strongly typed context variables accessible via `c.get()` and `c.set()`.
  */
 export type AppVariables = {
   user: JwtPayload;
@@ -58,14 +65,14 @@ export type AppVariables = {
 };
 
 /**
- * Entorno de la aplicación Hono
+ * Custom Hono environment type binding AppVariables into Hono handlers and middleware.
  */
 export type AppEnv = {
   Variables: AppVariables;
 };
 
 /**
- * Metadatos para respuestas paginadas
+ * Standardized pagination metadata returned in list endpoints.
  */
 export interface PaginationMeta {
   total: number;
