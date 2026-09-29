@@ -33,14 +33,16 @@ ENV PORT=3011
 
 RUN apk add --no-cache openssl
 
-# Crear usuario sin privilegios root por seguridad
-USER node
+# Crear directorio de datos persistente con permisos para el usuario node
+RUN mkdir -p /app/data && chown -R node:node /app
 
 COPY --chown=node:node package*.json ./
 COPY --chown=node:node prisma.config.ts ./
 COPY --chown=node:node prisma ./prisma/
+COPY --chown=node:node docker-entrypoint.sh ./
 
-# Instalar únicamente dependencias de producción
+# Instalar dependencias de producción (incluye prisma para ejecutar db push en el entrypoint)
+USER node
 RUN npm ci --omit=dev
 
 # Copiar el código compilado y el cliente generado de Prisma
@@ -49,4 +51,6 @@ COPY --chown=node:node --from=builder /app/src/generated ./src/generated
 
 EXPOSE 3011
 
+ENTRYPOINT ["./docker-entrypoint.sh"]
 CMD ["node", "dist/index.js"]
+

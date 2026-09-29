@@ -17,7 +17,7 @@ import { comparePassword } from "../utils/password.js";
 
 export const authRoutes = new Hono<AppEnv>();
 
-// Apply strict rate limiting on login endpoint (10 requests / minute)
+// Apply strict rate limiting on login endpoint (30 requests / minute)
 authRoutes.use("/login", rateLimiter(60_000, 30));
 
 /**
@@ -239,11 +239,35 @@ authRoutes.post(
         where: { token: refreshToken },
       });
 
-      if (!storedToken || storedToken.expiresAt < new Date()) {
+      // Security (Token Reuse Detection): If a validly signed JWT refresh token is reused after rotation,
+      // it means someone may have compromised the token. Revoke the entire session immediately.
+      if (!storedToken) {
+        if (payload.sessionId) {
+          await Promise.all([
+            prisma.session.update({
+              where: { id: payload.sessionId },
+              data: { isActive: false },
+            }),
+            prisma.refreshToken.deleteMany({
+              where: { sessionId: payload.sessionId },
+            }),
+          ]);
+        }
         return c.json(
           {
             success: false,
-            message: "Refresh token expired or revoked. Please sign in again.",
+            message:
+              "Security alert: Refresh token has already been used or revoked. Session terminated.",
+          },
+          401,
+        );
+      }
+
+      if (storedToken.expiresAt < new Date()) {
+        return c.json(
+          {
+            success: false,
+            message: "Refresh token expired. Please sign in again.",
           },
           401,
         );

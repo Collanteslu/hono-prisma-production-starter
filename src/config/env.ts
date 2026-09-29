@@ -24,6 +24,10 @@ const envSchema = z.object({
   DATABASE_URL: z.string().default("file:./dev.db"),
   TURSO_DATABASE_URL: z.string().optional(),
   TURSO_AUTH_TOKEN: z.string().optional(),
+  TRUST_PROXY: z
+    .string()
+    .optional()
+    .transform((val) => val === "true" || val === "1"),
 });
 
 const parsedEnv = envSchema.safeParse(process.env);

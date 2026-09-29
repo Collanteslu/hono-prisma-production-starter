@@ -11,14 +11,29 @@ import { PrismaClient } from "./generated/client/client.js";
 import { logger } from "./lib/logger.js";
 import { hashPassword } from "./utils/password.js";
 
-/** Resolve absolute path to the local SQLite database file */
-const dbPath = path.resolve(process.cwd(), "dev.db");
-
 /**
- * Configure the LibSQL Driver Adapter for Prisma 7.
- * Supports embedded local SQLite file or remote Turso LibSQL cloud database.
+ * Resolve absolute or relative path to the local SQLite database file,
+ * or prioritize DATABASE_URL / TURSO_DATABASE_URL environment variables.
  */
-const libsqlUrl = env.TURSO_DATABASE_URL || `file:${dbPath}`;
+function resolveDatabaseUrl(): string {
+  if (env.TURSO_DATABASE_URL) {
+    return env.TURSO_DATABASE_URL;
+  }
+  if (env.DATABASE_URL) {
+    // If DATABASE_URL starts with file:, normalize path if relative
+    if (env.DATABASE_URL.startsWith("file:")) {
+      const rawPath = env.DATABASE_URL.replace(/^file:/, "");
+      const resolvedPath = path.isAbsolute(rawPath)
+        ? rawPath
+        : path.resolve(process.cwd(), rawPath);
+      return `file:${resolvedPath}`;
+    }
+    return env.DATABASE_URL;
+  }
+  return `file:${path.resolve(process.cwd(), "dev.db")}`;
+}
+
+const libsqlUrl = resolveDatabaseUrl();
 const adapter = new PrismaLibSql({
   url: libsqlUrl,
   authToken: env.TURSO_AUTH_TOKEN,
@@ -29,8 +44,14 @@ export const prisma = new PrismaClient({ adapter });
 /**
  * Database seeder executed during application startup.
  * Seeds initial demo accounts and tasks with hashed passwords if the database is empty.
+ * Security: Disabled in production to prevent hardcoded demo credentials.
  */
 export async function seedDatabase() {
+  if (env.NODE_ENV === "production") {
+    logger.info("🔒 Production mode detected: Skipping demo seeder.");
+    return;
+  }
+
   const usersCount = await prisma.user.count();
 
   if (usersCount === 0) {

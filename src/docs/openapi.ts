@@ -165,8 +165,11 @@ export const openApiSpec = {
     },
     "/api/users": {
       get: {
-        summary: "Listar usuarios (Paginado)",
+        summary: "Listar usuarios (Solo Admin, Paginado)",
+        description:
+          "Lista las cuentas de usuario registradas con sus emails y roles. Requiere rol de administrador.",
         security: [{ BearerAuth: [] }],
+
         parameters: [
           { name: "page", in: "query", schema: { type: "integer", default: 1 } },
           { name: "limit", in: "query", schema: { type: "integer", default: 10 } },

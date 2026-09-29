@@ -73,4 +73,51 @@ describe("Authentication & Session API", () => {
     expect(data.refreshToken).toBeDefined();
     expect(data.refreshToken).not.toBe(refreshToken); // rotated
   });
+
+  it("POST /api/auth/refresh reusing an already rotated token should terminate session", async () => {
+    // Re-submit the old (already rotated) refresh token
+    const res = await app.request("/api/auth/refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        refreshToken: refreshToken,
+      }),
+    });
+
+    expect(res.status).toBe(401);
+    const data = await res.json();
+    expect(data.success).toBe(false);
+    expect(data.message).toContain("Security alert");
+  });
+
+  it("Standard user cannot list all users (GET /api/users should return 403)", async () => {
+    // 1. Login as standard user (Ana)
+    const loginRes = await app.request("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: "ana@example.com",
+        password: "password123",
+      }),
+    });
+    const { accessToken: userToken } = await loginRes.json();
+
+    // 2. Attempt to list users
+    const listRes = await app.request("/api/users", {
+      method: "GET",
+      headers: { Authorization: `Bearer ${userToken}` },
+    });
+    expect(listRes.status).toBe(403);
+
+    // 3. Attempt to modify admin account
+    const putRes = await app.request("/api/users/user-1", {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${userToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ name: "Hacked Admin" }),
+    });
+    expect(putRes.status).toBe(403);
+  });
 });
