@@ -5,7 +5,15 @@ meta {
 }
 
 get {
-  url: {{baseUrl}}/api/users
+  url: {{baseUrl}}/api/users?page=1&limit=10&order=desc
   body: none
   auth: none
+}
+
+params:query {
+  page: 1
+  limit: 10
+  order: desc
+  ~search: ana
+  ~role: user
 }

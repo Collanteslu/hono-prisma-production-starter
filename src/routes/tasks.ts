@@ -1,33 +1,87 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { prisma } from '../db.js';
-import { AppEnv } from '../types/index.js';
-import { createTaskSchema, updateTaskSchema } from '../schemas/index.js';
+import { AppEnv, PaginationMeta } from '../types/index.js';
+import { createTaskSchema, updateTaskSchema, taskQuerySchema } from '../schemas/index.js';
 
 export const taskRoutes = new Hono<AppEnv>();
 
 /**
  * GET /api/tasks
- * Devuelve ÚNICAMENTE las tareas que pertenecen al usuario autenticado en el token JWT.
- * Consulta directamente a SQLite filtrando por userId.
+ * Lista paginada de tareas exclusivas del usuario autenticado.
+ * Soporta filtros:
+ *  - page: número de página (default: 1)
+ *  - limit: cantidad por página (default: 10, max: 100)
+ *  - search: búsqueda textual en título y descripción
+ *  - completed: 'true' o 'false'
+ *  - sortBy: 'createdAt' o 'title'
+ *  - order: 'asc' o 'desc'
  */
-taskRoutes.get('/', async (c) => {
-  const currentUser = c.get('user');
+taskRoutes.get(
+  '/',
+  zValidator('query', taskQuerySchema, (result, c) => {
+    if (!result.success) {
+      return c.json(
+        {
+          success: false,
+          message: 'Parámetros de consulta de tareas inválidos',
+          errors: result.error.flatten().fieldErrors
+        },
+        400
+      );
+    }
+  }),
+  async (c) => {
+    const currentUser = c.get('user');
+    const { page, limit, search, completed, sortBy, order } = c.req.valid('query');
+    const skip = (page - 1) * limit;
 
-  const userTasks = await prisma.task.findMany({
-    where: { userId: currentUser.userId },
-    orderBy: { createdAt: 'desc' }
-  });
+    // Filtro base: pertenencia al usuario del token
+    const where: any = {
+      userId: currentUser.userId
+    };
 
-  return c.json({
-    success: true,
-    count: userTasks.length,
-    data: userTasks.map((t) => ({
-      ...t,
-      createdAt: t.createdAt.toISOString()
-    }))
-  });
-});
+    if (completed !== undefined) {
+      where.completed = completed === 'true';
+    }
+
+    if (search) {
+      where.OR = [
+        { title: { contains: search } },
+        { description: { contains: search } }
+      ];
+    }
+
+    const [total, tasks] = await Promise.all([
+      prisma.task.count({ where }),
+      prisma.task.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { [sortBy]: order }
+      })
+    ]);
+
+    const totalPages = Math.ceil(total / limit) || 1;
+    const pagination: PaginationMeta = {
+      total,
+      page,
+      limit,
+      totalPages,
+      hasNextPage: page < totalPages,
+      hasPrevPage: page > 1
+    };
+
+    return c.json({
+      success: true,
+      pagination,
+      data: tasks.map((t) => ({
+        ...t,
+        createdAt: t.createdAt.toISOString()
+      }))
+    });
+  }
+);
 
 /**
  * GET /api/tasks/:id
@@ -73,7 +127,7 @@ taskRoutes.get('/:id', async (c) => {
 
 /**
  * POST /api/tasks
- * Crea una nueva tarea en SQLite asignada directamente al usuario autenticado en el token.
+ * Crea una nueva tarea asignada directamente al usuario autenticado en el token.
  */
 taskRoutes.post(
   '/',
@@ -152,7 +206,6 @@ taskRoutes.put(
       );
     }
 
-    // Comprobamos propiedad estricta
     if (existingTask.userId !== currentUser.userId) {
       return c.json(
         {
@@ -207,7 +260,6 @@ taskRoutes.delete('/:id', async (c) => {
     );
   }
 
-  // Comprobamos propiedad estricta
   if (existingTask.userId !== currentUser.userId) {
     return c.json(
       {

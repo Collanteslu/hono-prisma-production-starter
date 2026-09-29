@@ -5,7 +5,15 @@ meta {
 }
 
 get {
-  url: {{baseUrl}}/api/tasks
+  url: {{baseUrl}}/api/tasks?page=1&limit=10&order=desc
   body: none
   auth: none
+}
+
+params:query {
+  page: 1
+  limit: 10
+  order: desc
+  ~search: interfaz
+  ~completed: false
 }

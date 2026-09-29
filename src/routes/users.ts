@@ -1,14 +1,12 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { prisma } from '../db.js';
-import { AppEnv } from '../types/index.js';
-import { createUserSchema, updateUserSchema } from '../schemas/index.js';
+import { AppEnv, PaginationMeta } from '../types/index.js';
+import { createUserSchema, updateUserSchema, userQuerySchema } from '../schemas/index.js';
+import { hashPassword } from '../utils/password.js';
 
 export const userRoutes = new Hono<AppEnv>();
 
-/**
- * Función auxiliar para limpiar la contraseña antes de responder al cliente.
- */
 function sanitizeUser(user: { id: string; name: string; email: string; role: string; createdAt: Date }) {
   return {
     id: user.id,
@@ -21,23 +19,71 @@ function sanitizeUser(user: { id: string; name: string; email: string; role: str
 
 /**
  * GET /api/users
- * Devuelve la lista completa de usuarios desde SQLite (sin contraseñas).
+ * Lista usuarios con paginación, búsqueda por nombre o email, y ordenación.
  */
-userRoutes.get('/', async (c) => {
-  const allUsers = await prisma.user.findMany({
-    orderBy: { createdAt: 'desc' }
-  });
+userRoutes.get(
+  '/',
+  zValidator('query', userQuerySchema, (result, c) => {
+    if (!result.success) {
+      return c.json(
+        {
+          success: false,
+          message: 'Parámetros de consulta inválidos',
+          errors: result.error.flatten().fieldErrors
+        },
+        400
+      );
+    }
+  }),
+  async (c) => {
+    const { page, limit, search, role, sortBy, order } = c.req.valid('query');
+    const skip = (page - 1) * limit;
 
-  return c.json({
-    success: true,
-    count: allUsers.length,
-    data: allUsers.map(sanitizeUser)
-  });
-});
+    // Filtros dinámicos con Prisma
+    const where: any = {};
+
+    if (role) {
+      where.role = role;
+    }
+
+    if (search) {
+      where.OR = [
+        { name: { contains: search } },
+        { email: { contains: search } }
+      ];
+    }
+
+    const [total, users] = await Promise.all([
+      prisma.user.count({ where }),
+      prisma.user.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { [sortBy]: order }
+      })
+    ]);
+
+    const totalPages = Math.ceil(total / limit) || 1;
+    const pagination: PaginationMeta = {
+      total,
+      page,
+      limit,
+      totalPages,
+      hasNextPage: page < totalPages,
+      hasPrevPage: page > 1
+    };
+
+    return c.json({
+      success: true,
+      pagination,
+      data: users.map(sanitizeUser)
+    });
+  }
+);
 
 /**
  * GET /api/users/:id
- * Obtiene los detalles de un usuario específico por su ID.
+ * Detalle de un usuario específico.
  */
 userRoutes.get('/:id', async (c) => {
   const id = c.req.param('id');
@@ -63,8 +109,7 @@ userRoutes.get('/:id', async (c) => {
 
 /**
  * POST /api/users
- * Crea un nuevo usuario en SQLite con validación estricta de Zod.
- * Solo administradores pueden asignar roles de 'admin'; por defecto se crea con rol 'user'.
+ * Crea un nuevo usuario con contraseña hasheada (bcrypt).
  */
 userRoutes.post(
   '/',
@@ -83,7 +128,6 @@ userRoutes.post(
   async (c) => {
     const { name, email, password, role } = c.req.valid('json');
 
-    // Verificar si el email ya existe en SQLite
     const existing = await prisma.user.findUnique({
       where: { email: email.toLowerCase() }
     });
@@ -98,16 +142,18 @@ userRoutes.post(
       );
     }
 
-    // Comprobamos el usuario logueado desde el contexto tipado
     const currentUser = c.get('user');
     const finalRole: 'admin' | 'user' =
       role === 'admin' && currentUser?.role === 'admin' ? 'admin' : 'user';
+
+    // Hashear contraseña antes de almacenar en la base de datos
+    const hashedPassword = await hashPassword(password);
 
     const newUser = await prisma.user.create({
       data: {
         name,
         email: email.toLowerCase(),
-        password,
+        password: hashedPassword,
         role: finalRole
       }
     });
@@ -115,7 +161,7 @@ userRoutes.post(
     return c.json(
       {
         success: true,
-        message: 'Usuario creado exitosamente.',
+        message: 'Usuario creado exitosamente con contraseña segura.',
         data: sanitizeUser(newUser)
       },
       201
@@ -125,7 +171,7 @@ userRoutes.post(
 
 /**
  * PUT /api/users/:id
- * Actualiza los datos de un usuario existente previa validación Zod.
+ * Actualiza los datos de un usuario existente.
  */
 userRoutes.put(
   '/:id',
@@ -160,7 +206,6 @@ userRoutes.put(
 
     const { name, email, password } = c.req.valid('json');
 
-    // Si intenta cambiar el email, validamos que no pertenezca a otro usuario
     if (email && email.toLowerCase() !== existingUser.email) {
       const emailTaken = await prisma.user.findUnique({
         where: { email: email.toLowerCase() }
@@ -176,12 +221,17 @@ userRoutes.put(
       }
     }
 
+    let hashedPasswordUpdate: string | undefined;
+    if (password) {
+      hashedPasswordUpdate = await hashPassword(password);
+    }
+
     const updatedUser = await prisma.user.update({
       where: { id },
       data: {
         ...(name && { name }),
         ...(email && { email: email.toLowerCase() }),
-        ...(password && { password })
+        ...(hashedPasswordUpdate && { password: hashedPasswordUpdate })
       }
     });
 
@@ -195,7 +245,7 @@ userRoutes.put(
 
 /**
  * DELETE /api/users/:id
- * Elimina un usuario. La configuración en Prisma onDelete: Cascade borra automáticamente sus tareas.
+ * Elimina un usuario y borra en cascada sus tareas y refresh tokens.
  */
 userRoutes.delete('/:id', async (c) => {
   const id = c.req.param('id');
@@ -214,10 +264,8 @@ userRoutes.delete('/:id', async (c) => {
     );
   }
 
-  // Contamos cuántas tareas se borrarán antes de eliminar
   const tasksCount = await prisma.task.count({ where: { userId: id } });
 
-  // Al borrar el usuario, Prisma y SQLite eliminan sus tareas asociadas en cascada
   await prisma.user.delete({
     where: { id }
   });

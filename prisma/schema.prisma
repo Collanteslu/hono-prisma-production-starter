@@ -16,8 +16,19 @@ model User {
   createdAt DateTime @default(now())
 
   // Relación: Un usuario puede tener muchas tareas
-  // onDelete: Cascade elimina automáticamente sus tareas si se borra el usuario
-  tasks     Task[]
+  tasks         Task[]
+  // Relación: Sesiones con Refresh Tokens activos
+  refreshTokens RefreshToken[]
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model Task {

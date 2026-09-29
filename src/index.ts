@@ -3,95 +3,166 @@ import { serve } from '@hono/node-server';
 import { logger } from 'hono/logger';
 import { cors } from 'hono/cors';
 import { prettyJSON } from 'hono/pretty-json';
+import { secureHeaders } from 'hono/secure-headers';
+import { apiReference } from '@scalar/hono-api-reference';
 
-// Base de datos y semilla de inicio
-import { seedDatabase } from './db.js';
+// Configuración de entorno y base de datos
+import { env } from './config/env.js';
+import { prisma, seedDatabase } from './db.js';
+import { AppEnv } from './types/index.js';
+import { openApiSpec } from './docs/openapi.js';
 
-// Importación de rutas modulares
+// Middlewares
+import { authMiddleware } from './middleware/auth.js';
+import { requestIdMiddleware } from './middleware/requestId.js';
+
+// Rutas
 import { authRoutes } from './routes/auth.js';
 import { userRoutes } from './routes/users.js';
 import { taskRoutes } from './routes/tasks.js';
 
-// Importación del middleware de autenticación
-import { authMiddleware } from './middleware/auth.js';
-
 /**
- * Instancia principal de la aplicación Hono
+ * Instancia principal de la aplicación Hono tipada con AppEnv
  */
-const app = new Hono();
+const app = new Hono<AppEnv>();
 
 /**
  * -------------------------------------------------------------
- * Middlewares Globales
+ * Middlewares Globales de Seguridad y Trazabilidad
  * -------------------------------------------------------------
  */
-// 1. Logger: Imprime en consola cada petición HTTP entrante con su tiempo de respuesta y status code
+// 1. Trazabilidad: Asigna o propaga X-Request-Id en cada petición
+app.use('*', requestIdMiddleware);
+
+// 2. Seguridad HTTP: Cabeceras HSTS, XSS Protection, CSP, No-Sniff, Frameguard
+app.use('*', secureHeaders());
+
+// 3. Logger HTTP con tiempo de respuesta
 app.use('*', logger());
 
-// 2. CORS: Habilita el intercambio de recursos entre orígenes para consumir desde cualquier frontend
-app.use('*', cors());
+// 4. CORS configurado
+app.use(
+  '*',
+  cors({
+    origin: '*',
+    allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowHeaders: ['Content-Type', 'Authorization', 'X-Request-Id']
+  })
+);
 
-// 3. Pretty JSON: Formatea los JSON en las respuestas para que sean legibles en el navegador y curl
+// 5. Formateador JSON legible
 app.use('*', prettyJSON());
 
 /**
  * -------------------------------------------------------------
- * Rutas Públicas
+ * Documentación Interactiva OpenAPI (Scalar) & Healthcheck
  * -------------------------------------------------------------
  */
-// Bienvenida y Health Check
+// Especificación OpenAPI en formato JSON
+app.get('/openapi.json', (c) => c.json(openApiSpec));
+
+// Panel interactivo de documentación en /docs
+app.get(
+  '/docs',
+  apiReference({
+    pageTitle: 'API Reference | Hono + Prisma',
+    spec: {
+      url: '/openapi.json'
+    }
+  })
+);
+
+// Endpoint de Healthcheck profundo (servidor + conexión a SQLite)
+app.get('/healthz', async (c) => {
+  try {
+    const startTime = Date.now();
+    await prisma.$queryRaw`SELECT 1`;
+    const dbLatencyMs = Date.now() - startTime;
+
+    return c.json({
+      status: 'healthy',
+      timestamp: new Date().toISOString(),
+      uptimeSeconds: Math.floor(process.uptime()),
+      database: {
+        status: 'connected',
+        latencyMs: dbLatencyMs
+      }
+    });
+  } catch (error) {
+    return c.json(
+      {
+        status: 'unhealthy',
+        timestamp: new Date().toISOString(),
+        database: {
+          status: 'disconnected',
+          error: error instanceof Error ? error.message : 'Error al conectar a SQLite'
+        }
+      },
+      503
+    );
+  }
+});
+
+// Endpoint raíz de bienvenida
 app.get('/', (c) => {
   return c.json({
     status: 'online',
-    name: 'API REST con Hono, Prisma 7 y SQLite',
+    name: 'API REST Profesional con Hono, Prisma 7 y SQLite',
     version: '1.0.0',
-    documentation: {
-      auth: 'POST /api/auth/login',
+    documentationUrl: '/docs',
+    endpoints: {
+      healthcheck: '/healthz',
+      documentation: '/docs',
+      auth: {
+        login: 'POST /api/auth/login',
+        refresh: 'POST /api/auth/refresh',
+        logout: 'POST /api/auth/logout'
+      },
       users: 'GET, POST, PUT, DELETE /api/users',
       tasks: 'GET, POST, PUT, DELETE /api/tasks'
     }
   });
 });
 
-// Rutas de autenticación (Login público)
-app.route('/api/auth', authRoutes);
-
 /**
  * -------------------------------------------------------------
- * Rutas Protegidas por Autenticación JWT
+ * Montaje de Rutas
  * -------------------------------------------------------------
- * Cualquier endpoint bajo /api/users/* y /api/tasks/* requerirá
- * una cabecera 'Authorization: Bearer <token>' válida.
  */
+// Rutas públicas de autenticación
+app.route('/api/auth', authRoutes);
+
+// Protección con autenticación JWT para usuarios y tareas
 app.use('/api/users/*', authMiddleware);
 app.use('/api/tasks/*', authMiddleware);
 
-// Montaje de las rutas secundarias
 app.route('/api/users', userRoutes);
 app.route('/api/tasks', taskRoutes);
 
 /**
  * -------------------------------------------------------------
- * Manejo Global de Errores y Rutas no Encontradas (404)
+ * Manejadores de Error y 404
  * -------------------------------------------------------------
  */
 app.notFound((c) => {
   return c.json(
     {
       success: false,
-      message: `Ruta no encontrada: ${c.req.method} ${c.req.url}`
+      message: `Ruta no encontrada: ${c.req.method} ${c.req.url}`,
+      requestId: c.get('requestId')
     },
     404
   );
 });
 
 app.onError((err, c) => {
-  console.error('Error no controlado en la aplicación:', err);
+  console.error(`[Error] RequestId: ${c.get('requestId')}:`, err);
   return c.json(
     {
       success: false,
       message: 'Ocurrió un error interno en el servidor.',
-      error: err.message
+      requestId: c.get('requestId'),
+      error: env.NODE_ENV === 'development' ? err.message : undefined
     },
     500
   );
@@ -99,19 +170,17 @@ app.onError((err, c) => {
 
 /**
  * -------------------------------------------------------------
- * Inicialización del Servidor Node.js y Base de Datos
+ * Inicialización del Servidor Node.js
  * -------------------------------------------------------------
  */
-const port = Number(process.env.PORT) || 3011;
-
-// Inicializamos la base de datos SQLite antes de escuchar peticiones
 await seedDatabase();
 
-console.log(` Servidor Hono con Prisma 7 iniciado en http://localhost:${port}`);
+console.log(` Servidor Hono listo en http://localhost:${env.PORT}`);
+console.log(` Documentación interactiva disponible en: http://localhost:${env.PORT}/docs`);
 
 serve({
   fetch: app.fetch,
-  port
+  port: env.PORT
 });
 
 export default app;

@@ -5,17 +5,17 @@ export interface User {
   id: string;
   name: string;
   email: string;
-  password: string; // En producción debe almacenarse hasheada (p. ej. con bcrypt/argon2)
-  role: 'admin' | 'user';
+  password: string;
+  role: string;
   createdAt: string;
 }
 
 /**
- * Definición del modelo de Tarea (asociada a un usuario mediante userId).
+ * Definición del modelo de Tarea.
  */
 export interface Task {
   id: string;
-  userId: string; // Clave foránea que relaciona la tarea con el usuario
+  userId: string;
   title: string;
   description: string;
   completed: boolean;
@@ -37,6 +37,7 @@ export interface JwtPayload {
  */
 export type AppVariables = {
   user: JwtPayload;
+  requestId: string;
 };
 
 /**
@@ -45,3 +46,15 @@ export type AppVariables = {
 export type AppEnv = {
   Variables: AppVariables;
 };
+
+/**
+ * Metadatos para respuestas paginadas
+ */
+export interface PaginationMeta {
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+  hasNextPage: boolean;
+  hasPrevPage: boolean;
+}

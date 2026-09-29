@@ -13,6 +13,20 @@ export const loginSchema = z.object({
 });
 
 /**
+ * Esquema para renovar el Access Token con Refresh Token.
+ */
+export const refreshTokenSchema = z.object({
+  refreshToken: z.string({ required_error: 'El refreshToken es obligatorio' })
+});
+
+/**
+ * Esquema para cerrar sesión (Logout).
+ */
+export const logoutSchema = z.object({
+  refreshToken: z.string({ required_error: 'El refreshToken es obligatorio para revocar la sesión' })
+});
+
+/**
  * Esquema para crear un nuevo usuario.
  */
 export const createUserSchema = z.object({
@@ -42,7 +56,6 @@ export const updateUserSchema = z.object({
 
 /**
  * Esquema para crear una tarea.
- * No acepta userId en el body: la tarea pertenece estrictamente al usuario logueado en el token.
  */
 export const createTaskSchema = z.object({
   title: z
@@ -62,4 +75,28 @@ export const updateTaskSchema = z.object({
   completed: z.boolean().optional()
 }).refine((data) => Object.keys(data).length > 0, {
   message: 'Debes proporcionar al menos un campo para actualizar (title, description o completed)'
+});
+
+/**
+ * Esquema de consulta para tareas con paginación, filtros y búsqueda.
+ */
+export const taskQuerySchema = z.object({
+  page: z.coerce.number().min(1).default(1),
+  limit: z.coerce.number().min(1).max(100).default(10),
+  search: z.string().optional(),
+  completed: z.enum(['true', 'false']).optional(),
+  sortBy: z.enum(['createdAt', 'title']).default('createdAt'),
+  order: z.enum(['asc', 'desc']).default('desc')
+});
+
+/**
+ * Esquema de consulta para usuarios con paginación y búsqueda.
+ */
+export const userQuerySchema = z.object({
+  page: z.coerce.number().min(1).default(1),
+  limit: z.coerce.number().min(1).max(100).default(10),
+  search: z.string().optional(),
+  role: z.enum(['admin', 'user']).optional(),
+  sortBy: z.enum(['createdAt', 'name', 'email']).default('createdAt'),
+  order: z.enum(['asc', 'desc']).default('desc')
 });
