@@ -297,8 +297,8 @@ Following API conventions (JSON:API, RFC 7807), responses include telemetry meta
 
 | Method | Endpoint | Description | Auth |
 |---|---|---|---|
-| `GET` | `/api/tasks` | Paginated list (`?page=1&limit=10&search=text&completed=true`) | Bearer |
-| `GET` | `/api/tasks/:id` | Get single task (403 if belonging to another user) | Bearer |
+| `GET` | `/api/tasks` | Paginated list (`?page=1&limit=10&search=text&completed=true&include=user`) | Bearer |
+| `GET` | `/api/tasks/:id` | Get single task (`?include=user`, 403 if belonging to another user) | Bearer |
 | `POST` | `/api/tasks` | Create task (automatically assigned to token's userId) | Bearer |
 | `PUT` | `/api/tasks/:id` | Update title, description, or completed state | Bearer |
 | `DELETE` | `/api/tasks/:id` | Delete task | Bearer |
@@ -306,8 +306,8 @@ Following API conventions (JSON:API, RFC 7807), responses include telemetry meta
 ### Users (`/api/users`)
 | Method | Endpoint | Description | Auth |
 |---|---|---|---|
-| `GET` | `/api/users` | Paginated users list (`?page=1&limit=10&search=ana&role=user`) | Bearer |
-| `GET` | `/api/users/:id` | Get user details | Bearer |
+| `GET` | `/api/users` | Paginated users list (`?page=1&limit=10&search=ana&role=user&include=tasks,sessions`) | Bearer |
+| `GET` | `/api/users/:id` | Get user details (`?include=tasks,sessions`) | Bearer |
 | `POST` | `/api/users` | Create user with bcrypt-hashed credentials | Bearer |
 | `PUT` | `/api/users/:id` | Update user profile | Bearer |
 | `PATCH` | `/api/users/:id/block` | **Suspend / Reactivate User** *(Admin only)*: Immediately revokes all active sessions | Bearer |
