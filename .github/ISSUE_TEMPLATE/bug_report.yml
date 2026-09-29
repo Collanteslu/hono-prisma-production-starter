@@ -1,0 +1,44 @@
+name: 🐛 Reporte de Bug
+description: Reporta un error o comportamiento inesperado en la API
+title: "[BUG]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Gracias por tomarte el tiempo de reportar este problema. Asegúrate de verificar que el error no haya sido reportado previamente.
+  - type: textarea
+    id: description
+    attributes:
+      label: Descripción del problema
+      description: Explica de forma clara y concisa en qué consiste el fallo.
+      placeholder: Al realizar una petición POST a /api/tasks con...
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Pasos para reproducir
+      description: Pasos exactos para reproducir el comportamiento.
+      placeholder: |
+        1. Iniciar sesión con 'POST /api/auth/login'
+        2. Enviar petición con la cabecera 'Authorization: Bearer <token>'
+        3. Observar el código de respuesta
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Comportamiento esperado
+      description: ¿Qué debería haber ocurrido?
+      placeholder: Se esperaba una respuesta HTTP 200 con el JSON...
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Entorno
+      description: Versión de Node.js, sistema operativo o cliente HTTP utilizado (Bruno, cURL, etc.).
+      placeholder: Node.js v24.21.0, macOS Sonoma, Bruno v1.38
+    validations:
+      required: false

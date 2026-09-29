@@ -1,0 +1,33 @@
+name: 🚀 Solicitud de Característica / Mejora
+description: Propón una nueva funcionalidad o mejora arquitectónica para la plantilla
+title: "[FEATURE]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ¡Las sugerencias de mejoras y nuevas ideas son bienvenidas!
+  - type: textarea
+    id: problem
+    attributes:
+      label: ¿Qué problema o necesidad resuelve esta funcionalidad?
+      description: Una descripción clara de la motivación detrás de la propuesta.
+      placeholder: Actualmente la plantilla no incluye soporte directo para...
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Solución propuesta
+      description: Describe cómo te gustaría que funcionase o cómo se implementaría.
+      placeholder: Se podría agregar un nuevo middleware o soporte para...
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternativas consideradas
+      description: ¿Has considerado otras soluciones o paquetes alternativos?
+      placeholder: Por ejemplo, usar X en lugar de Y...
+    validations:
+      required: false
