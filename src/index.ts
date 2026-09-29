@@ -4,6 +4,9 @@ import { logger } from 'hono/logger';
 import { cors } from 'hono/cors';
 import { prettyJSON } from 'hono/pretty-json';
 
+// Base de datos y semilla de inicio
+import { seedDatabase } from './db.js';
+
 // Importación de rutas modulares
 import { authRoutes } from './routes/auth.js';
 import { userRoutes } from './routes/users.js';
@@ -40,7 +43,7 @@ app.use('*', prettyJSON());
 app.get('/', (c) => {
   return c.json({
     status: 'online',
-    name: 'API REST con Hono',
+    name: 'API REST con Hono, Prisma 7 y SQLite',
     version: '1.0.0',
     documentation: {
       auth: 'POST /api/auth/login',
@@ -96,12 +99,15 @@ app.onError((err, c) => {
 
 /**
  * -------------------------------------------------------------
- * Inicialización del Servidor Node.js
+ * Inicialización del Servidor Node.js y Base de Datos
  * -------------------------------------------------------------
  */
 const port = Number(process.env.PORT) || 3000;
 
-console.log(` Servidor Hono iniciado en http://localhost:${port}`);
+// Inicializamos la base de datos SQLite antes de escuchar peticiones
+await seedDatabase();
+
+console.log(` Servidor Hono con Prisma 7 iniciado en http://localhost:${port}`);
 
 serve({
   fetch: app.fetch,

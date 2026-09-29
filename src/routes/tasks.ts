@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
-import { tasks } from '../db.js';
-import { Task, AppEnv } from '../types/index.js';
+import { prisma } from '../db.js';
+import { AppEnv } from '../types/index.js';
 import { createTaskSchema, updateTaskSchema } from '../schemas/index.js';
 
 export const taskRoutes = new Hono<AppEnv>();
@@ -9,18 +9,23 @@ export const taskRoutes = new Hono<AppEnv>();
 /**
  * GET /api/tasks
  * Devuelve ÚNICAMENTE las tareas que pertenecen al usuario autenticado en el token JWT.
- * No admite ni necesita parámetros de filtrado externo: el aislamiento es total.
+ * Consulta directamente a SQLite filtrando por userId.
  */
-taskRoutes.get('/', (c) => {
+taskRoutes.get('/', async (c) => {
   const currentUser = c.get('user');
 
-  // Filtro estricto por el ID del usuario en sesión
-  const userTasks = tasks.filter((t) => t.userId === currentUser.userId);
+  const userTasks = await prisma.task.findMany({
+    where: { userId: currentUser.userId },
+    orderBy: { createdAt: 'desc' }
+  });
 
   return c.json({
     success: true,
     count: userTasks.length,
-    data: userTasks
+    data: userTasks.map((t) => ({
+      ...t,
+      createdAt: t.createdAt.toISOString()
+    }))
   });
 });
 
@@ -28,10 +33,13 @@ taskRoutes.get('/', (c) => {
  * GET /api/tasks/:id
  * Obtiene una tarea por su ID solo si le pertenece al usuario del token.
  */
-taskRoutes.get('/:id', (c) => {
+taskRoutes.get('/:id', async (c) => {
   const id = c.req.param('id');
   const currentUser = c.get('user');
-  const task = tasks.find((t) => t.id === id);
+
+  const task = await prisma.task.findUnique({
+    where: { id }
+  });
 
   if (!task) {
     return c.json(
@@ -43,7 +51,7 @@ taskRoutes.get('/:id', (c) => {
     );
   }
 
-  // Verificamos que la tarea pertenezca al usuario del token
+  // Verificamos propiedad estricta
   if (task.userId !== currentUser.userId) {
     return c.json(
       {
@@ -56,13 +64,16 @@ taskRoutes.get('/:id', (c) => {
 
   return c.json({
     success: true,
-    data: task
+    data: {
+      ...task,
+      createdAt: task.createdAt.toISOString()
+    }
   });
 });
 
 /**
  * POST /api/tasks
- * Crea una nueva tarea asignada directamente al usuario autenticado en el token.
+ * Crea una nueva tarea en SQLite asignada directamente al usuario autenticado en el token.
  */
 taskRoutes.post(
   '/',
@@ -82,22 +93,23 @@ taskRoutes.post(
     const { title, description, completed } = c.req.valid('json');
     const currentUser = c.get('user');
 
-    const newTask: Task = {
-      id: `task-${Date.now()}`,
-      userId: currentUser.userId, // Siempre el usuario del token
-      title,
-      description: description || '',
-      completed: Boolean(completed),
-      createdAt: new Date().toISOString()
-    };
-
-    tasks.push(newTask);
+    const newTask = await prisma.task.create({
+      data: {
+        userId: currentUser.userId,
+        title,
+        description: description || '',
+        completed: Boolean(completed)
+      }
+    });
 
     return c.json(
       {
         success: true,
         message: 'Tarea creada exitosamente.',
-        data: newTask
+        data: {
+          ...newTask,
+          createdAt: newTask.createdAt.toISOString()
+        }
       },
       201
     );
@@ -125,9 +137,12 @@ taskRoutes.put(
   async (c) => {
     const id = c.req.param('id');
     const currentUser = c.get('user');
-    const taskIndex = tasks.findIndex((t) => t.id === id);
 
-    if (taskIndex === -1) {
+    const existingTask = await prisma.task.findUnique({
+      where: { id }
+    });
+
+    if (!existingTask) {
       return c.json(
         {
           success: false,
@@ -138,7 +153,7 @@ taskRoutes.put(
     }
 
     // Comprobamos propiedad estricta
-    if (tasks[taskIndex].userId !== currentUser.userId) {
+    if (existingTask.userId !== currentUser.userId) {
       return c.json(
         {
           success: false,
@@ -150,14 +165,22 @@ taskRoutes.put(
 
     const { title, description, completed } = c.req.valid('json');
 
-    if (title !== undefined) tasks[taskIndex].title = title;
-    if (description !== undefined) tasks[taskIndex].description = description;
-    if (completed !== undefined) tasks[taskIndex].completed = completed;
+    const updatedTask = await prisma.task.update({
+      where: { id },
+      data: {
+        ...(title !== undefined && { title }),
+        ...(description !== undefined && { description }),
+        ...(completed !== undefined && { completed })
+      }
+    });
 
     return c.json({
       success: true,
       message: 'Tarea actualizada exitosamente.',
-      data: tasks[taskIndex]
+      data: {
+        ...updatedTask,
+        createdAt: updatedTask.createdAt.toISOString()
+      }
     });
   }
 );
@@ -166,12 +189,15 @@ taskRoutes.put(
  * DELETE /api/tasks/:id
  * Elimina una tarea solo si pertenece al usuario del token.
  */
-taskRoutes.delete('/:id', (c) => {
+taskRoutes.delete('/:id', async (c) => {
   const id = c.req.param('id');
   const currentUser = c.get('user');
-  const taskIndex = tasks.findIndex((t) => t.id === id);
 
-  if (taskIndex === -1) {
+  const existingTask = await prisma.task.findUnique({
+    where: { id }
+  });
+
+  if (!existingTask) {
     return c.json(
       {
         success: false,
@@ -182,7 +208,7 @@ taskRoutes.delete('/:id', (c) => {
   }
 
   // Comprobamos propiedad estricta
-  if (tasks[taskIndex].userId !== currentUser.userId) {
+  if (existingTask.userId !== currentUser.userId) {
     return c.json(
       {
         success: false,
@@ -192,11 +218,16 @@ taskRoutes.delete('/:id', (c) => {
     );
   }
 
-  const deletedTask = tasks.splice(taskIndex, 1)[0];
+  const deletedTask = await prisma.task.delete({
+    where: { id }
+  });
 
   return c.json({
     success: true,
     message: 'Tarea eliminada correctamente.',
-    data: deletedTask
+    data: {
+      ...deletedTask,
+      createdAt: deletedTask.createdAt.toISOString()
+    }
   });
 });

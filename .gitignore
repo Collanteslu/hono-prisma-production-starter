@@ -32,3 +32,9 @@ Thumbs.db
 coverage/
 .temp/
 .cache/
+
+# Base de datos SQLite local
+*.db
+*.db-journal
+dev.db
+src/generated/

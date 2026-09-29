@@ -1,0 +1,33 @@
+datasource db {
+  provider = "sqlite"
+}
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/client"
+}
+
+model User {
+  id        String   @id @default(uuid())
+  name      String
+  email     String   @unique
+  password  String
+  role      String   @default("user") // "admin" | "user"
+  createdAt DateTime @default(now())
+
+  // Relación: Un usuario puede tener muchas tareas
+  // onDelete: Cascade elimina automáticamente sus tareas si se borra el usuario
+  tasks     Task[]
+}
+
+model Task {
+  id          String   @id @default(uuid())
+  userId      String
+  title       String
+  description String   @default("")
+  completed   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  // Relación de clave foránea hacia User
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}

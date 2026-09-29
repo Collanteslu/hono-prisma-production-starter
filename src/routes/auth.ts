@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { sign } from 'hono/jwt';
 import { zValidator } from '@hono/zod-validator';
-import { users } from '../db.js';
+import { prisma } from '../db.js';
 import { JWT_SECRET } from '../middleware/auth.js';
 import { loginSchema } from '../schemas/index.js';
 
@@ -12,7 +12,7 @@ export const authRoutes = new Hono();
  * Endpoint público para iniciar sesión y obtener un JWT.
  * 
  * Valida automáticamente el body con Zod mediante zValidator.
- * Si falla, retorna HTTP 400 con los errores estructurados.
+ * Consulta al usuario en la base de datos SQLite con Prisma 7.
  */
 authRoutes.post(
   '/login',
@@ -29,11 +29,12 @@ authRoutes.post(
     }
   }),
   async (c) => {
-    // Obtenemos los datos ya validados y tipados por Zod
     const { email, password } = c.req.valid('json');
 
-    // Buscamos al usuario por correo
-    const user = users.find((u) => u.email.toLowerCase() === email.toLowerCase());
+    // Buscamos al usuario en SQLite mediante Prisma
+    const user = await prisma.user.findUnique({
+      where: { email: email.toLowerCase() }
+    });
 
     if (!user || user.password !== password) {
       return c.json(
@@ -51,7 +52,7 @@ authRoutes.post(
       {
         userId: user.id,
         email: user.email,
-        role: user.role,
+        role: user.role as 'admin' | 'user',
         exp
       },
       JWT_SECRET,

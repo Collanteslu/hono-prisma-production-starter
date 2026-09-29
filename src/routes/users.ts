@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
-import { users, tasks } from '../db.js';
-import { User, AppEnv } from '../types/index.js';
+import { prisma } from '../db.js';
+import { AppEnv } from '../types/index.js';
 import { createUserSchema, updateUserSchema } from '../schemas/index.js';
 
 export const userRoutes = new Hono<AppEnv>();
@@ -9,20 +9,29 @@ export const userRoutes = new Hono<AppEnv>();
 /**
  * Función auxiliar para limpiar la contraseña antes de responder al cliente.
  */
-function sanitizeUser(user: User) {
-  const { password, ...rest } = user;
-  return rest;
+function sanitizeUser(user: { id: string; name: string; email: string; role: string; createdAt: Date }) {
+  return {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    role: user.role,
+    createdAt: user.createdAt.toISOString()
+  };
 }
 
 /**
  * GET /api/users
- * Devuelve la lista completa de usuarios (sin contraseñas).
+ * Devuelve la lista completa de usuarios desde SQLite (sin contraseñas).
  */
-userRoutes.get('/', (c) => {
+userRoutes.get('/', async (c) => {
+  const allUsers = await prisma.user.findMany({
+    orderBy: { createdAt: 'desc' }
+  });
+
   return c.json({
     success: true,
-    count: users.length,
-    data: users.map(sanitizeUser)
+    count: allUsers.length,
+    data: allUsers.map(sanitizeUser)
   });
 });
 
@@ -30,9 +39,11 @@ userRoutes.get('/', (c) => {
  * GET /api/users/:id
  * Obtiene los detalles de un usuario específico por su ID.
  */
-userRoutes.get('/:id', (c) => {
+userRoutes.get('/:id', async (c) => {
   const id = c.req.param('id');
-  const user = users.find((u) => u.id === id);
+  const user = await prisma.user.findUnique({
+    where: { id }
+  });
 
   if (!user) {
     return c.json(
@@ -52,7 +63,7 @@ userRoutes.get('/:id', (c) => {
 
 /**
  * POST /api/users
- * Crea un nuevo usuario con validación estricta de Zod.
+ * Crea un nuevo usuario en SQLite con validación estricta de Zod.
  * Solo administradores pueden asignar roles de 'admin'; por defecto se crea con rol 'user'.
  */
 userRoutes.post(
@@ -72,9 +83,12 @@ userRoutes.post(
   async (c) => {
     const { name, email, password, role } = c.req.valid('json');
 
-    // Verificar si el email ya existe
-    const exists = users.some((u) => u.email.toLowerCase() === email.toLowerCase());
-    if (exists) {
+    // Verificar si el email ya existe en SQLite
+    const existing = await prisma.user.findUnique({
+      where: { email: email.toLowerCase() }
+    });
+
+    if (existing) {
       return c.json(
         {
           success: false,
@@ -89,16 +103,14 @@ userRoutes.post(
     const finalRole: 'admin' | 'user' =
       role === 'admin' && currentUser?.role === 'admin' ? 'admin' : 'user';
 
-    const newUser: User = {
-      id: `user-${Date.now()}`,
-      name,
-      email,
-      password,
-      role: finalRole,
-      createdAt: new Date().toISOString()
-    };
-
-    users.push(newUser);
+    const newUser = await prisma.user.create({
+      data: {
+        name,
+        email: email.toLowerCase(),
+        password,
+        role: finalRole
+      }
+    });
 
     return c.json(
       {
@@ -131,9 +143,12 @@ userRoutes.put(
   }),
   async (c) => {
     const id = c.req.param('id');
-    const userIndex = users.findIndex((u) => u.id === id);
 
-    if (userIndex === -1) {
+    const existingUser = await prisma.user.findUnique({
+      where: { id }
+    });
+
+    if (!existingUser) {
       return c.json(
         {
           success: false,
@@ -146,10 +161,10 @@ userRoutes.put(
     const { name, email, password } = c.req.valid('json');
 
     // Si intenta cambiar el email, validamos que no pertenezca a otro usuario
-    if (email && email.toLowerCase() !== users[userIndex].email.toLowerCase()) {
-      const emailTaken = users.some(
-        (u) => u.email.toLowerCase() === email.toLowerCase() && u.id !== id
-      );
+    if (email && email.toLowerCase() !== existingUser.email) {
+      const emailTaken = await prisma.user.findUnique({
+        where: { email: email.toLowerCase() }
+      });
       if (emailTaken) {
         return c.json(
           {
@@ -159,29 +174,37 @@ userRoutes.put(
           409
         );
       }
-      users[userIndex].email = email;
     }
 
-    if (name) users[userIndex].name = name;
-    if (password) users[userIndex].password = password;
+    const updatedUser = await prisma.user.update({
+      where: { id },
+      data: {
+        ...(name && { name }),
+        ...(email && { email: email.toLowerCase() }),
+        ...(password && { password })
+      }
+    });
 
     return c.json({
       success: true,
       message: 'Usuario actualizado correctamente.',
-      data: sanitizeUser(users[userIndex])
+      data: sanitizeUser(updatedUser)
     });
   }
 );
 
 /**
  * DELETE /api/users/:id
- * Elimina un usuario y borra en cascada todas sus tareas asociadas.
+ * Elimina un usuario. La configuración en Prisma onDelete: Cascade borra automáticamente sus tareas.
  */
-userRoutes.delete('/:id', (c) => {
+userRoutes.delete('/:id', async (c) => {
   const id = c.req.param('id');
-  const userIndex = users.findIndex((u) => u.id === id);
 
-  if (userIndex === -1) {
+  const existingUser = await prisma.user.findUnique({
+    where: { id }
+  });
+
+  if (!existingUser) {
     return c.json(
       {
         success: false,
@@ -191,21 +214,17 @@ userRoutes.delete('/:id', (c) => {
     );
   }
 
-  // Eliminar usuario
-  const deletedUser = users.splice(userIndex, 1)[0];
+  // Contamos cuántas tareas se borrarán antes de eliminar
+  const tasksCount = await prisma.task.count({ where: { userId: id } });
 
-  // Eliminación en cascada de tareas que pertenecían al usuario
-  let deletedTasksCount = 0;
-  for (let i = tasks.length - 1; i >= 0; i--) {
-    if (tasks[i].userId === id) {
-      tasks.splice(i, 1);
-      deletedTasksCount++;
-    }
-  }
+  // Al borrar el usuario, Prisma y SQLite eliminan sus tareas asociadas en cascada
+  await prisma.user.delete({
+    where: { id }
+  });
 
   return c.json({
     success: true,
-    message: `Usuario '${deletedUser.name}' eliminado con éxito, junto a sus ${deletedTasksCount} tarea(s) asociadas.`,
-    data: sanitizeUser(deletedUser)
+    message: `Usuario '${existingUser.name}' eliminado con éxito, junto a sus ${tasksCount} tarea(s) asociadas.`,
+    data: sanitizeUser(existingUser)
   });
 });
