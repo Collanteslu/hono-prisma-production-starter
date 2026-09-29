@@ -276,3 +276,31 @@ npx prisma db push
 # Verificar tipos de TypeScript
 npx tsc --noEmit
 ```
+
+---
+
+## 🐳 Despliegue con Docker y Docker Compose
+
+La API incluye un `Dockerfile` multi-etapa optimizado y un archivo `docker-compose.yml` listos para producción:
+
+```bash
+# Construir y levantar el contenedor en segundo plano
+docker compose up -d
+
+# Ver logs del contenedor
+docker compose logs -f
+
+# Detener el contenedor
+docker compose down
+```
+
+El volumen `sqlite_data` persistirá el archivo de base de datos de forma segura entre reinicios de contenedor.
+
+---
+
+## 🧹 Rutina de Mantenimiento y Graceful Shutdown
+
+1. **Graceful Shutdown (Cierre Limpio)**:
+   - Al recibir `SIGINT` (Ctrl+C) o `SIGTERM` (Docker / Kubernetes), el servidor deja de aceptar conexiones nuevas, espera a que terminen las peticiones en vuelo y desconecta `Prisma` y SQLite de forma segura para evitar la corrupción de datos.
+2. **Rutina de Limpieza Automática (`src/jobs/cleanup.ts`)**:
+   - Cada hora, una tarea en segundo plano purga automáticamente sesiones y refresh tokens expirados o inactivos, manteniendo la base de datos ligera y rápida.

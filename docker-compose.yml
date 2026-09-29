@@ -1,0 +1,21 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: hono_rest_api
+    restart: unless-stopped
+    ports:
+      - "3011:3011"
+    environment:
+      - PORT=3011
+      - NODE_ENV=production
+      - JWT_SECRET=super_secret_jwt_access_token_key_2026_hono_api_prod
+      - JWT_REFRESH_SECRET=super_secret_jwt_refresh_token_key_2026_hono_api_prod
+      - DATABASE_URL=file:/app/data/prod.db
+    volumes:
+      # Volumen persistente para almacenar el archivo SQLite de producción
+      - sqlite_data:/app/data
+
+volumes:
+  sqlite_data:

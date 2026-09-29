@@ -11,6 +11,7 @@ import { env } from './config/env.js';
 import { prisma, seedDatabase } from './db.js';
 import { AppEnv } from './types/index.js';
 import { openApiSpec } from './docs/openapi.js';
+import { startCleanupJob } from './jobs/cleanup.js';
 
 // Middlewares
 import { authMiddleware } from './middleware/auth.js';
@@ -109,7 +110,7 @@ app.get('/', (c) => {
   return c.json({
     status: 'online',
     name: 'API REST Profesional con Hono, Prisma 7, SQLite y Sesiones Activas',
-    version: '1.1.0',
+    version: '1.2.0',
     documentationUrl: '/docs',
     endpoints: {
       healthcheck: '/healthz',
@@ -182,17 +183,66 @@ app.onError((err, c) => {
 
 /**
  * -------------------------------------------------------------
- * Inicialización del Servidor Node.js
+ * Inicialización del Servidor Node.js y Tareas en Segundo Plano
  * -------------------------------------------------------------
  */
 await seedDatabase();
 
+// Iniciar rutina de limpieza periódica de sesiones obsoletas
+startCleanupJob(60 * 60 * 1000); // Cada 1 hora
+
 console.log(` Servidor Hono listo en http://localhost:${env.PORT}`);
 console.log(` Documentación interactiva disponible en: http://localhost:${env.PORT}/docs`);
 
-serve({
+const server = serve({
   fetch: app.fetch,
   port: env.PORT
 });
+
+/**
+ * -------------------------------------------------------------
+ * Cierre Limpio (Graceful Shutdown)
+ * -------------------------------------------------------------
+ * Captura SIGINT (Ctrl+C) y SIGTERM (despliegues/Docker) para:
+ * 1. Dejar de recibir nuevas peticiones HTTP.
+ * 2. Permitir que las peticiones en curso terminen de procesarse.
+ * 3. Desconectar Prisma y SQLite limpiamente sin corromper la base de datos.
+ */
+let isShuttingDown = false;
+
+const gracefulShutdown = async (signal: string) => {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+
+  console.log(`\n🛑 Recibida señal ${signal}. Iniciando apagado limpio (Graceful Shutdown)...`);
+
+  try {
+    // Cerrar el servidor HTTP
+    server.close(async () => {
+      console.log('✔ Conexiones HTTP cerradas.');
+      try {
+        // Desconectar Prisma Client
+        await prisma.$disconnect();
+        console.log('✔ Conexión a SQLite desconectada correctamente.');
+        process.exit(0);
+      } catch (dbErr) {
+        console.error('❌ Error al desconectar la base de datos:', dbErr);
+        process.exit(1);
+      }
+    });
+
+    // Timeout de seguridad forzoso de 10 segundos
+    setTimeout(() => {
+      console.error('⚠️ Apagado forzado por superar el tiempo límite de espera.');
+      process.exit(1);
+    }, 10000).unref();
+  } catch (err) {
+    console.error('❌ Error durante el cierre del servidor:', err);
+    process.exit(1);
+  }
+};
+
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
 export default app;
