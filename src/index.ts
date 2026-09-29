@@ -102,7 +102,7 @@ app.onError((err, c) => {
  * Inicialización del Servidor Node.js y Base de Datos
  * -------------------------------------------------------------
  */
-const port = Number(process.env.PORT) || 3000;
+const port = Number(process.env.PORT) || 3011;
 
 // Inicializamos la base de datos SQLite antes de escuchar peticiones
 await seedDatabase();
