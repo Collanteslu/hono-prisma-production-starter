@@ -96,7 +96,7 @@ hono-prisma-production-starter/
 ## ⚡ Quickstart in 3 Steps
 
 ### Prerequisites
-- **Node.js** v18.14.0 or higher (Tested on Node v20 & v24)
+- **Node.js** v20.0.0 or higher (Tested on Node v20 & v22 LTS)
 - **npm** v9 or higher
 
 ```bash
@@ -106,11 +106,13 @@ cd your-repo-name
 
 # 2. Install dependencies & initialize SQLite database
 npm install
+npx prisma generate
 npx prisma db push
 
 # 3. Start development server with hot-reload
 npm run dev
 ```
+
 
 The API will be running on:
 ```text
@@ -281,9 +283,10 @@ Following API conventions (JSON:API, RFC 7807), responses include telemetry meta
 ### Authentication (`/api/auth`)
 | Method | Endpoint | Description | Rate Limit |
 |---|---|---|---|
-| `POST` | `/api/auth/login` | Authenticate, create database session, issue tokens | 10 req/min |
+| `POST` | `/api/auth/login` | Authenticate, create database session, issue tokens | 30 req/min |
 | `POST` | `/api/auth/refresh` | Renew token pair with **Token Rotation** | No |
 | `POST` | `/api/auth/logout` | Deactivate session and revoke refresh tokens | No |
+
 
 ### Session Management (`/api/sessions`)
 | Method | Endpoint | Description | Auth |
@@ -306,13 +309,14 @@ Following API conventions (JSON:API, RFC 7807), responses include telemetry meta
 ### Users (`/api/users`)
 | Method | Endpoint | Description | Auth |
 |---|---|---|---|
-| `GET` | `/api/users` | Paginated users list (`?page=1&limit=10&search=ana&role=user&include=tasks,sessions&includeDeleted=true&sort=-createdAt,name&filter[role]=user`) | Bearer |
+| `GET` | `/api/users` | Paginated users list (`?page=1&limit=10&search=ana&role=user&include=tasks,sessions&includeDeleted=true&sort=-createdAt,name&filter[role]=user`) | Admin |
 | `GET` | `/api/users/:id` | Get user details (`?include=tasks,sessions`) | Bearer |
 | `POST` | `/api/users` | Create user with bcrypt-hashed credentials | Bearer |
-| `PUT` | `/api/users/:id` | Update user profile | Bearer |
-| `PATCH` | `/api/users/:id/block` | **Suspend / Reactivate User** *(Admin only)*: Immediately revokes all active sessions | Bearer |
-| `POST` | `/api/users/:id/revoke-sessions` | Terminate all active sessions for a target user | Bearer |
-| `DELETE` | `/api/users/:id` | **Soft-delete** user and revoke all sessions. Add `?permanent=true` for physical cascade delete | Bearer |
+| `PUT` | `/api/users/:id` | Update own user profile (or any profile if Admin) | Bearer |
+| `PATCH` | `/api/users/:id/block` | **Suspend / Reactivate User** *(Admin only)*: Immediately revokes all active sessions | Admin |
+| `POST` | `/api/users/:id/revoke-sessions` | Terminate all active sessions for a target user | Admin |
+| `DELETE` | `/api/users/:id` | Delete own account (or any if Admin). **Soft-delete** by default, `?permanent=true` for cascade | Bearer |
+
 
 ### Audit & Security Logs (`/api/audit-logs`)
 | Method | Endpoint | Description | Auth |

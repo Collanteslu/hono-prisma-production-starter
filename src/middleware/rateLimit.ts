@@ -5,6 +5,7 @@
  */
 
 import type { Context, Next } from "hono";
+import { env } from "../config/env.js";
 
 interface RateLimitRecord {
   count: number;
@@ -30,11 +31,21 @@ export function rateLimiter(windowMs: number = 60_000, maxRequests: number = 10)
   }, windowMs);
 
   return async (c: Context, next: Next) => {
-    // Extract client IP address with proxy support
-    const ip =
-      c.req.header("x-forwarded-for")?.split(",")[0].trim() ||
-      c.req.header("x-real-ip") ||
-      "localhost";
+    // Extract client IP address securely:
+    // Only trust reverse-proxy headers (X-Forwarded-For / X-Real-IP) if TRUST_PROXY is explicitly enabled.
+    // Otherwise fallback to Cloudflare cf-connecting-ip or standard localhost.
+    let ip = "localhost";
+
+    if (env.TRUST_PROXY) {
+      ip =
+        c.req.header("cf-connecting-ip") ||
+        c.req.header("x-forwarded-for")?.split(",")[0].trim() ||
+        c.req.header("x-real-ip") ||
+        "localhost";
+    } else {
+      // In untrusted proxy environments, prioritize cloudflare edge header if available, or direct connection
+      ip = c.req.header("cf-connecting-ip") || "localhost";
+    }
 
     const now = Date.now();
     const clientRecord = ipStore.get(ip);

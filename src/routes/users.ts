@@ -97,6 +97,17 @@ userRoutes.get(
     }
   }),
   async (c) => {
+    const currentUser = c.get("user");
+    if (currentUser.role !== "admin") {
+      return c.json(
+        {
+          success: false,
+          message: "Forbidden: Only administrators can list all users.",
+        },
+        403,
+      );
+    }
+
     const { page, limit, search, role, isBlocked, sortBy, order, sort, includeDeleted } =
       c.req.valid("query");
     const skip = (page - 1) * limit;
@@ -396,6 +407,18 @@ userRoutes.put(
   }),
   async (c) => {
     const id = c.req.param("id");
+    const currentUser = c.get("user");
+
+    // Ownership & Role Verification: User must be modifying their own profile OR have admin role
+    if (currentUser.role !== "admin" && currentUser.userId !== id) {
+      return c.json(
+        {
+          success: false,
+          message: "Forbidden: You do not have permission to modify another user's profile.",
+        },
+        403,
+      );
+    }
 
     const existingUser = await prisma.user.findUnique({
       where: { id },
@@ -442,10 +465,16 @@ userRoutes.put(
       },
     });
 
-    return c.json({
-      success: true,
+    await recordAudit(c, {
+      userId: currentUser.userId,
+      action: "UPDATE",
+      entity: "User",
+      entityId: id,
+      details: { updatedFields: Object.keys(c.req.valid("json")) },
+    });
+
+    return successResponse(c, sanitizeUser(updatedUser), {
       message: "User profile updated successfully.",
-      data: sanitizeUser(updatedUser),
     });
   },
 );
@@ -453,11 +482,23 @@ userRoutes.put(
 /**
  * DELETE /api/users/:id
  * Deletes a user account with cascading deletion across tasks and sessions.
+ * Security: Only admins or the account owner can delete an account.
  */
 userRoutes.delete("/:id", async (c) => {
   const id = c.req.param("id");
   const isPermanent = c.req.query("permanent") === "true";
   const currentUser = c.get("user");
+
+  // Ownership & Role Verification: User must be deleting their own account OR have admin role
+  if (currentUser.role !== "admin" && currentUser.userId !== id) {
+    return c.json(
+      {
+        success: false,
+        message: "Forbidden: You do not have permission to delete another user's account.",
+      },
+      403,
+    );
+  }
 
   const existingUser = await prisma.user.findUnique({
     where: { id },
