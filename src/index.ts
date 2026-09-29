@@ -23,6 +23,7 @@ import { logger as appLogger } from "./lib/logger.js";
 // Middlewares
 import { authMiddleware } from "./middleware/auth.js";
 import { requestIdMiddleware } from "./middleware/requestId.js";
+import { auditRoutes } from "./routes/audit.js";
 // Route modules
 import { authRoutes } from "./routes/auth.js";
 import { sessionRoutes } from "./routes/sessions.js";
@@ -169,9 +170,11 @@ const routes = app
   .use("/api/sessions/*", authMiddleware)
   .use("/api/users/*", authMiddleware)
   .use("/api/tasks/*", authMiddleware)
+  .use("/api/audit-logs/*", authMiddleware)
   .route("/api/sessions", sessionRoutes)
   .route("/api/users", userRoutes)
-  .route("/api/tasks", taskRoutes);
+  .route("/api/tasks", taskRoutes)
+  .route("/api/audit-logs", auditRoutes);
 
 /**
  * Export Type-Safe RPC Application Type for client consumption (hc<AppType>)

@@ -8,6 +8,9 @@ import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import { prisma } from "../db.js";
 import type { UserWhereInput } from "../generated/client/models.js";
+
+import { recordAudit } from "../lib/audit.js";
+import { parseFilters, parseSorting } from "../lib/query.js";
 import { parseIncludes } from "../lib/relations.js";
 import { successResponse } from "../lib/response.js";
 import {
@@ -31,12 +34,14 @@ function sanitizeUser(user: {
   role: string;
   isBlocked: boolean;
   blockedReason?: string | null;
+  deletedAt?: Date | null;
   createdAt: Date;
   tasks?: Array<{
     id: string;
     title: string;
     description: string;
     completed: boolean;
+    deletedAt?: Date | null;
     createdAt: Date;
   }>;
   sessions?: Array<{
@@ -55,6 +60,7 @@ function sanitizeUser(user: {
     role: user.role,
     isBlocked: user.isBlocked,
     blockedReason: user.blockedReason,
+    deletedAt: user.deletedAt ? user.deletedAt.toISOString() : null,
     createdAt: user.createdAt.toISOString(),
     ...(user.tasks && {
       tasks: user.tasks.map((t) => ({
@@ -91,10 +97,16 @@ userRoutes.get(
     }
   }),
   async (c) => {
-    const { page, limit, search, role, isBlocked, sortBy, order } = c.req.valid("query");
+    const { page, limit, search, role, isBlocked, sortBy, order, sort, includeDeleted } =
+      c.req.valid("query");
     const skip = (page - 1) * limit;
 
     const where: UserWhereInput = {};
+
+    // Soft delete filter: Exclude soft-deleted users unless requested
+    if (includeDeleted !== "true") {
+      where.deletedAt = null;
+    }
 
     if (role) {
       where.role = role;
@@ -108,6 +120,17 @@ userRoutes.get(
       where.OR = [{ name: { contains: search } }, { email: { contains: search } }];
     }
 
+    // Apply generic filter[...] parameters
+    const dynamicFilters = parseFilters(c.req.query(), {
+      allowedFields: ["name", "email", "role", "isBlocked"],
+    });
+    Object.assign(where, dynamicFilters);
+
+    // Apply sorting (prioritize ?sort=-field if provided, fallback to sortBy & order)
+    const orderBy = sort
+      ? parseSorting(sort, { allowedFields: ["createdAt", "name", "email", "role"] })
+      : { [sortBy]: order };
+
     const include = parseIncludes(c.req.query("include"), {
       tasks: true,
       sessions: true,
@@ -119,7 +142,7 @@ userRoutes.get(
         where,
         skip,
         take: limit,
-        orderBy: { [sortBy]: order },
+        orderBy,
         include,
       }),
     ]);
@@ -433,6 +456,8 @@ userRoutes.put(
  */
 userRoutes.delete("/:id", async (c) => {
   const id = c.req.param("id");
+  const isPermanent = c.req.query("permanent") === "true";
+  const currentUser = c.get("user");
 
   const existingUser = await prisma.user.findUnique({
     where: { id },
@@ -448,15 +473,45 @@ userRoutes.delete("/:id", async (c) => {
     );
   }
 
-  const tasksCount = await prisma.task.count({ where: { userId: id } });
+  if (isPermanent) {
+    const tasksCount = await prisma.task.count({ where: { userId: id } });
 
-  await prisma.user.delete({
-    where: { id },
+    await prisma.user.delete({
+      where: { id },
+    });
+
+    await recordAudit(c, {
+      userId: currentUser?.userId || null,
+      action: "DELETE_PERMANENT",
+      entity: "User",
+      entityId: id,
+    });
+
+    return successResponse(c, sanitizeUser(existingUser), {
+      message: `User '${existingUser.name}' and ${tasksCount} associated task(s) permanently deleted.`,
+    });
+  }
+
+  // Soft delete user and revoke all active sessions
+  const [softDeletedUser] = await Promise.all([
+    prisma.user.update({
+      where: { id },
+      data: { deletedAt: new Date(), isBlocked: true, blockedReason: "Account deleted" },
+    }),
+    prisma.session.updateMany({
+      where: { userId: id, isActive: true },
+      data: { isActive: false },
+    }),
+  ]);
+
+  await recordAudit(c, {
+    userId: currentUser?.userId || null,
+    action: "SOFT_DELETE",
+    entity: "User",
+    entityId: id,
   });
 
-  return c.json({
-    success: true,
-    message: `User '${existingUser.name}' and ${tasksCount} associated task(s) deleted successfully.`,
-    data: sanitizeUser(existingUser),
+  return successResponse(c, sanitizeUser(softDeletedUser), {
+    message: `User '${existingUser.name}' soft-deleted and all sessions revoked.`,
   });
 });
