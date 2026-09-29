@@ -173,6 +173,18 @@ export const openApiSpec = {
           { name: "search", in: "query", schema: { type: "string" } },
           { name: "role", in: "query", schema: { type: "string", enum: ["admin", "user"] } },
           {
+            name: "includeDeleted",
+            in: "query",
+            description: "Incluir cuentas borradas lógicamente (soft-delete)",
+            schema: { type: "string", enum: ["true", "false"], default: "false" },
+          },
+          {
+            name: "sort",
+            in: "query",
+            description: "Ordenación multidireccional (ej. -createdAt,name)",
+            schema: { type: "string", example: "-createdAt" },
+          },
+          {
             name: "include",
             in: "query",
             description: "Expansión relacional separada por comas (ej. tasks,sessions)",
@@ -229,16 +241,47 @@ export const openApiSpec = {
           "404": { description: "Usuario no encontrado" },
         },
       },
+      delete: {
+        summary: "Eliminar usuario (Soft-Delete por defecto)",
+        description:
+          "Aplica borrado lógico revocando todas sus sesiones activas. Si se especifica ?permanent=true, se elimina físicamente.",
+        security: [{ BearerAuth: [] }],
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string" } },
+          {
+            name: "permanent",
+            in: "query",
+            description: "Borrado físico definitivo",
+            schema: { type: "string", enum: ["true", "false"], default: "false" },
+          },
+        ],
+        responses: {
+          "200": { description: "Usuario soft-deleted o eliminado permanentemente" },
+          "404": { description: "Usuario no encontrado" },
+        },
+      },
     },
     "/api/tasks": {
       get: {
-        summary: "Listar tareas del usuario autenticado (Paginado)",
+        summary: "Listar tareas del usuario autenticado (Paginado, Filtros y Soft Delete)",
         security: [{ BearerAuth: [] }],
         parameters: [
           { name: "page", in: "query", schema: { type: "integer", default: 1 } },
           { name: "limit", in: "query", schema: { type: "integer", default: 10 } },
           { name: "search", in: "query", schema: { type: "string" } },
           { name: "completed", in: "query", schema: { type: "string", enum: ["true", "false"] } },
+          {
+            name: "includeDeleted",
+            in: "query",
+            description: "Incluir tareas marcadas con borrado lógico (soft-deleted)",
+            schema: { type: "string", enum: ["true", "false"], default: "false" },
+          },
+          {
+            name: "sort",
+            in: "query",
+            description: "Ordenación multidireccional (ej. -createdAt,title)",
+            schema: { type: "string", example: "-createdAt" },
+          },
           {
             name: "include",
             in: "query",
@@ -318,12 +361,50 @@ export const openApiSpec = {
         },
       },
       delete: {
-        summary: "Eliminar tarea (Solo el dueño)",
+        summary: "Eliminar tarea (Soft Delete por defecto, solo el dueño)",
+        description:
+          "Marca deletedAt por defecto. Si se pasa ?permanent=true, elimina la tarea físicamente de la base de datos.",
         security: [{ BearerAuth: [] }],
-        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string" } },
+          {
+            name: "permanent",
+            in: "query",
+            description: "Borrado físico permanente",
+            schema: { type: "string", enum: ["true", "false"], default: "false" },
+          },
+        ],
         responses: {
-          "200": { description: "Tarea eliminada" },
+          "200": { description: "Tarea soft-deleted o permanentemente eliminada" },
           "403": { description: "No te pertenece" },
+        },
+      },
+    },
+    "/api/audit-logs": {
+      get: {
+        summary: "Consultar registros de auditoría y trazabilidad (Solo Admin)",
+        description:
+          "Permite auditar mutaciones del sistema (CREATE, UPDATE, SOFT_DELETE, DELETE_PERMANENT, BLOCK).",
+        security: [{ BearerAuth: [] }],
+        parameters: [
+          { name: "page", in: "query", schema: { type: "integer", default: 1 } },
+          { name: "limit", in: "query", schema: { type: "integer", default: 20 } },
+          {
+            name: "entity",
+            in: "query",
+            description: "Filtrar por entidad (Task, User)",
+            schema: { type: "string" },
+          },
+          {
+            name: "action",
+            in: "query",
+            description: "Filtrar por tipo de acción",
+            schema: { type: "string" },
+          },
+        ],
+        responses: {
+          "200": { description: "Lista de eventos de auditoría" },
+          "403": { description: "Acceso exclusivo para administradores" },
         },
       },
     },
