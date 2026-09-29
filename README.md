@@ -1,6 +1,6 @@
 # ⚡ Hono + Prisma 7 (SQLite) Production REST API Starter Template
 
-[![CI & Typecheck](https://github.com/your-username/hono-prisma-production-starter/actions/workflows/ci.yml/badge.svg)](https://github.com/your-username/hono-prisma-production-starter/actions)
+[![CI & Typecheck](https://github.com/Collanteslu/hono-prisma-production-starter/actions/workflows/ci.yml/badge.svg)](https://github.com/Collanteslu/hono-prisma-production-starter/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Hono](https://img.shields.io/badge/Hono-v4-E36002.svg)](https://hono.dev/)
 [![Prisma](https://img.shields.io/badge/Prisma-v7-2D3748.svg)](https://www.prisma.io/)
