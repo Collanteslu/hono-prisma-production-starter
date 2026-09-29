@@ -3,270 +3,271 @@
  * Describe esquemas, parámetros de consulta, códigos de respuesta y seguridad JWT.
  */
 export const openApiSpec = {
-  openapi: '3.0.3',
+  openapi: "3.0.3",
   info: {
-    title: 'Hono REST API - Gestión de Usuarios y Tareas',
-    version: '1.0.0',
+    title: "Hono REST API - Gestión de Usuarios y Tareas",
+    version: "1.0.0",
     description:
-      'API REST profesional construida con Hono, Prisma 7 (SQLite), TypeScript, Zod, Autenticación JWT con Refresh Tokens y Rate Limiting.'
+      "API REST profesional construida con Hono, Prisma 7 (SQLite), TypeScript, Zod, Autenticación JWT con Refresh Tokens y Rate Limiting.",
   },
   servers: [
     {
-      url: 'http://localhost:3011',
-      description: 'Servidor Local de Desarrollo'
-    }
+      url: "http://localhost:3011",
+      description: "Servidor Local de Desarrollo",
+    },
   ],
   components: {
     securitySchemes: {
       BearerAuth: {
-        type: 'http',
-        scheme: 'bearer',
-        bearerFormat: 'JWT',
-        description: 'Introduce tu Access Token JWT generado al iniciar sesión'
-      }
+        type: "http",
+        scheme: "bearer",
+        bearerFormat: "JWT",
+        description: "Introduce tu Access Token JWT generado al iniciar sesión",
+      },
     },
     schemas: {
       User: {
-        type: 'object',
+        type: "object",
         properties: {
-          id: { type: 'string', format: 'uuid' },
-          name: { type: 'string', example: 'Ana García' },
-          email: { type: 'string', format: 'email', example: 'ana@example.com' },
-          role: { type: 'string', enum: ['admin', 'user'], example: 'user' },
-          createdAt: { type: 'string', format: 'date-time' }
-        }
+          id: { type: "string", format: "uuid" },
+          name: { type: "string", example: "Ana García" },
+          email: { type: "string", format: "email", example: "ana@example.com" },
+          role: { type: "string", enum: ["admin", "user"], example: "user" },
+          createdAt: { type: "string", format: "date-time" },
+        },
       },
       Task: {
-        type: 'object',
+        type: "object",
         properties: {
-          id: { type: 'string', format: 'uuid' },
-          userId: { type: 'string', format: 'uuid' },
-          title: { type: 'string', example: 'Diseñar interfaz frontend' },
-          description: { type: 'string', example: 'Crear vistas para consumir la API' },
-          completed: { type: 'boolean', example: false },
-          createdAt: { type: 'string', format: 'date-time' }
-        }
+          id: { type: "string", format: "uuid" },
+          userId: { type: "string", format: "uuid" },
+          title: { type: "string", example: "Diseñar interfaz frontend" },
+          description: { type: "string", example: "Crear vistas para consumir la API" },
+          completed: { type: "boolean", example: false },
+          createdAt: { type: "string", format: "date-time" },
+        },
       },
       PaginationMeta: {
-        type: 'object',
+        type: "object",
         properties: {
-          total: { type: 'integer', example: 42 },
-          page: { type: 'integer', example: 1 },
-          limit: { type: 'integer', example: 10 },
-          totalPages: { type: 'integer', example: 5 },
-          hasNextPage: { type: 'boolean', example: true },
-          hasPrevPage: { type: 'boolean', example: false }
-        }
-      }
-    }
+          total: { type: "integer", example: 42 },
+          page: { type: "integer", example: 1 },
+          limit: { type: "integer", example: 10 },
+          totalPages: { type: "integer", example: 5 },
+          hasNextPage: { type: "boolean", example: true },
+          hasPrevPage: { type: "boolean", example: false },
+        },
+      },
+    },
   },
   paths: {
-    '/healthz': {
+    "/healthz": {
       get: {
-        summary: 'Comprobación de salud (Healthcheck)',
-        description: 'Verifica la disponibilidad del servidor y la conexión activa a SQLite.',
+        summary: "Comprobación de salud (Healthcheck)",
+        description: "Verifica la disponibilidad del servidor y la conexión activa a SQLite.",
         responses: {
-          '200': { description: 'Servidor y base de datos saludables' },
-          '503': { description: 'Fallo de conexión a la base de datos' }
-        }
-      }
+          "200": { description: "Servidor y base de datos saludables" },
+          "503": { description: "Fallo de conexión a la base de datos" },
+        },
+      },
     },
-    '/api/auth/login': {
+    "/api/auth/login": {
       post: {
-        summary: 'Inicio de sesión (Login)',
-        description: 'Autentica credenciales y emite Access Token (15 min) y Refresh Token (7 días). Protegido por Rate Limiter.',
+        summary: "Inicio de sesión (Login)",
+        description:
+          "Autentica credenciales y emite Access Token (15 min) y Refresh Token (7 días). Protegido por Rate Limiter.",
         requestBody: {
           required: true,
           content: {
-            'application/json': {
+            "application/json": {
               schema: {
-                type: 'object',
-                required: ['email', 'password'],
+                type: "object",
+                required: ["email", "password"],
                 properties: {
-                  email: { type: 'string', format: 'email', example: 'admin@example.com' },
-                  password: { type: 'string', minLength: 6, example: 'password123' }
-                }
-              }
-            }
-          }
+                  email: { type: "string", format: "email", example: "admin@example.com" },
+                  password: { type: "string", minLength: 6, example: "password123" },
+                },
+              },
+            },
+          },
         },
         responses: {
-          '200': { description: 'Login exitoso' },
-          '400': { description: 'Error de validación Zod' },
-          '401': { description: 'Credenciales inválidas' },
-          '429': { description: 'Rate limit excedido' }
-        }
-      }
+          "200": { description: "Login exitoso" },
+          "400": { description: "Error de validación Zod" },
+          "401": { description: "Credenciales inválidas" },
+          "429": { description: "Rate limit excedido" },
+        },
+      },
     },
-    '/api/auth/refresh': {
+    "/api/auth/refresh": {
       post: {
-        summary: 'Renovar Access Token (Token Rotation)',
-        description: 'Intercambia un Refresh Token válido por un nuevo par de tokens.',
+        summary: "Renovar Access Token (Token Rotation)",
+        description: "Intercambia un Refresh Token válido por un nuevo par de tokens.",
         requestBody: {
           required: true,
           content: {
-            'application/json': {
+            "application/json": {
               schema: {
-                type: 'object',
-                required: ['refreshToken'],
+                type: "object",
+                required: ["refreshToken"],
                 properties: {
-                  refreshToken: { type: 'string' }
-                }
-              }
-            }
-          }
+                  refreshToken: { type: "string" },
+                },
+              },
+            },
+          },
         },
         responses: {
-          '200': { description: 'Tokens renovados' },
-          '401': { description: 'Refresh token expirado o revocado' }
-        }
-      }
+          "200": { description: "Tokens renovados" },
+          "401": { description: "Refresh token expirado o revocado" },
+        },
+      },
     },
-    '/api/auth/logout': {
+    "/api/auth/logout": {
       post: {
-        summary: 'Cierre de sesión (Logout)',
-        description: 'Revoca el refresh token en la base de datos invalidando la sesión.',
+        summary: "Cierre de sesión (Logout)",
+        description: "Revoca el refresh token en la base de datos invalidando la sesión.",
         requestBody: {
           required: true,
           content: {
-            'application/json': {
+            "application/json": {
               schema: {
-                type: 'object',
-                required: ['refreshToken'],
+                type: "object",
+                required: ["refreshToken"],
                 properties: {
-                  refreshToken: { type: 'string' }
-                }
-              }
-            }
-          }
+                  refreshToken: { type: "string" },
+                },
+              },
+            },
+          },
         },
         responses: {
-          '200': { description: 'Sesión revocada' }
-        }
-      }
+          "200": { description: "Sesión revocada" },
+        },
+      },
     },
-    '/api/users': {
+    "/api/users": {
       get: {
-        summary: 'Listar usuarios (Paginado)',
+        summary: "Listar usuarios (Paginado)",
         security: [{ BearerAuth: [] }],
         parameters: [
-          { name: 'page', in: 'query', schema: { type: 'integer', default: 1 } },
-          { name: 'limit', in: 'query', schema: { type: 'integer', default: 10 } },
-          { name: 'search', in: 'query', schema: { type: 'string' } },
-          { name: 'role', in: 'query', schema: { type: 'string', enum: ['admin', 'user'] } }
+          { name: "page", in: "query", schema: { type: "integer", default: 1 } },
+          { name: "limit", in: "query", schema: { type: "integer", default: 10 } },
+          { name: "search", in: "query", schema: { type: "string" } },
+          { name: "role", in: "query", schema: { type: "string", enum: ["admin", "user"] } },
         ],
         responses: {
-          '200': { description: 'Lista paginada de usuarios' }
-        }
+          "200": { description: "Lista paginada de usuarios" },
+        },
       },
       post: {
-        summary: 'Crear usuario',
+        summary: "Crear usuario",
         security: [{ BearerAuth: [] }],
         requestBody: {
           required: true,
           content: {
-            'application/json': {
+            "application/json": {
               schema: {
-                type: 'object',
-                required: ['name', 'email', 'password'],
+                type: "object",
+                required: ["name", "email", "password"],
                 properties: {
-                  name: { type: 'string', example: 'Carlos López' },
-                  email: { type: 'string', format: 'email', example: 'carlos@example.com' },
-                  password: { type: 'string', minLength: 6, example: 'secret123' },
-                  role: { type: 'string', enum: ['admin', 'user'], default: 'user' }
-                }
-              }
-            }
-          }
+                  name: { type: "string", example: "Carlos López" },
+                  email: { type: "string", format: "email", example: "carlos@example.com" },
+                  password: { type: "string", minLength: 6, example: "secret123" },
+                  role: { type: "string", enum: ["admin", "user"], default: "user" },
+                },
+              },
+            },
+          },
         },
         responses: {
-          '201': { description: 'Usuario creado' },
-          '409': { description: 'Email duplicado' }
-        }
-      }
+          "201": { description: "Usuario creado" },
+          "409": { description: "Email duplicado" },
+        },
+      },
     },
-    '/api/tasks': {
+    "/api/tasks": {
       get: {
-        summary: 'Listar tareas del usuario autenticado (Paginado)',
+        summary: "Listar tareas del usuario autenticado (Paginado)",
         security: [{ BearerAuth: [] }],
         parameters: [
-          { name: 'page', in: 'query', schema: { type: 'integer', default: 1 } },
-          { name: 'limit', in: 'query', schema: { type: 'integer', default: 10 } },
-          { name: 'search', in: 'query', schema: { type: 'string' } },
-          { name: 'completed', in: 'query', schema: { type: 'string', enum: ['true', 'false'] } }
+          { name: "page", in: "query", schema: { type: "integer", default: 1 } },
+          { name: "limit", in: "query", schema: { type: "integer", default: 10 } },
+          { name: "search", in: "query", schema: { type: "string" } },
+          { name: "completed", in: "query", schema: { type: "string", enum: ["true", "false"] } },
         ],
         responses: {
-          '200': { description: 'Lista de tareas del usuario' }
-        }
+          "200": { description: "Lista de tareas del usuario" },
+        },
       },
       post: {
-        summary: 'Crear tarea',
+        summary: "Crear tarea",
         security: [{ BearerAuth: [] }],
         requestBody: {
           required: true,
           content: {
-            'application/json': {
+            "application/json": {
               schema: {
-                type: 'object',
-                required: ['title'],
+                type: "object",
+                required: ["title"],
                 properties: {
-                  title: { type: 'string', example: 'Estudiar Hono con OpenAPI' },
-                  description: { type: 'string', example: 'Probar documentación interactiva' },
-                  completed: { type: 'boolean', default: false }
-                }
-              }
-            }
-          }
+                  title: { type: "string", example: "Estudiar Hono con OpenAPI" },
+                  description: { type: "string", example: "Probar documentación interactiva" },
+                  completed: { type: "boolean", default: false },
+                },
+              },
+            },
+          },
         },
         responses: {
-          '201': { description: 'Tarea creada' }
-        }
-      }
+          "201": { description: "Tarea creada" },
+        },
+      },
     },
-    '/api/tasks/{id}': {
+    "/api/tasks/{id}": {
       get: {
-        summary: 'Ver tarea por ID (Solo el dueño)',
+        summary: "Ver tarea por ID (Solo el dueño)",
         security: [{ BearerAuth: [] }],
-        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
         responses: {
-          '200': { description: 'Detalle de la tarea' },
-          '403': { description: 'No te pertenece' },
-          '404': { description: 'No encontrada' }
-        }
+          "200": { description: "Detalle de la tarea" },
+          "403": { description: "No te pertenece" },
+          "404": { description: "No encontrada" },
+        },
       },
       put: {
-        summary: 'Actualizar tarea (Solo el dueño)',
+        summary: "Actualizar tarea (Solo el dueño)",
         security: [{ BearerAuth: [] }],
-        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
         requestBody: {
           required: true,
           content: {
-            'application/json': {
+            "application/json": {
               schema: {
-                type: 'object',
+                type: "object",
                 properties: {
-                  title: { type: 'string' },
-                  description: { type: 'string' },
-                  completed: { type: 'boolean' }
-                }
-              }
-            }
-          }
+                  title: { type: "string" },
+                  description: { type: "string" },
+                  completed: { type: "boolean" },
+                },
+              },
+            },
+          },
         },
         responses: {
-          '200': { description: 'Tarea actualizada' },
-          '403': { description: 'No te pertenece' }
-        }
+          "200": { description: "Tarea actualizada" },
+          "403": { description: "No te pertenece" },
+        },
       },
       delete: {
-        summary: 'Eliminar tarea (Solo el dueño)',
+        summary: "Eliminar tarea (Solo el dueño)",
         security: [{ BearerAuth: [] }],
-        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
         responses: {
-          '200': { description: 'Tarea eliminada' },
-          '403': { description: 'No te pertenece' }
-        }
-      }
-    }
-  }
+          "200": { description: "Tarea eliminada" },
+          "403": { description: "No te pertenece" },
+        },
+      },
+    },
+  },
 };

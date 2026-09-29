@@ -5,9 +5,9 @@
  * or revoke all active sessions immediately.
  */
 
-import { Hono } from 'hono';
-import { prisma } from '../db.js';
-import { AppEnv } from '../types/index.js';
+import { Hono } from "hono";
+import { prisma } from "../db.js";
+import type { AppEnv } from "../types/index.js";
 
 export const sessionRoutes = new Hono<AppEnv>();
 
@@ -15,12 +15,12 @@ export const sessionRoutes = new Hono<AppEnv>();
  * GET /api/sessions/me
  * Retrieves all sessions belonging to the currently authenticated user.
  */
-sessionRoutes.get('/me', async (c) => {
-  const currentUser = c.get('user');
+sessionRoutes.get("/me", async (c) => {
+  const currentUser = c.get("user");
 
   const sessions = await prisma.session.findMany({
     where: { userId: currentUser.userId },
-    orderBy: { createdAt: 'desc' }
+    orderBy: { createdAt: "desc" },
   });
 
   return c.json({
@@ -31,8 +31,8 @@ sessionRoutes.get('/me', async (c) => {
       ...s,
       createdAt: s.createdAt.toISOString(),
       expiresAt: s.expiresAt.toISOString(),
-      isCurrent: s.id === currentUser.sessionId
-    }))
+      isCurrent: s.id === currentUser.sessionId,
+    })),
   });
 });
 
@@ -40,48 +40,48 @@ sessionRoutes.get('/me', async (c) => {
  * DELETE /api/sessions/:sessionId
  * Terminates a specific session. Tokens tied to this session will be rejected immediately.
  */
-sessionRoutes.delete('/:sessionId', async (c) => {
-  const sessionId = c.req.param('sessionId');
-  const currentUser = c.get('user');
+sessionRoutes.delete("/:sessionId", async (c) => {
+  const sessionId = c.req.param("sessionId");
+  const currentUser = c.get("user");
 
   const session = await prisma.session.findUnique({
-    where: { id: sessionId }
+    where: { id: sessionId },
   });
 
   if (!session) {
     return c.json(
       {
         success: false,
-        message: `Session with ID '${sessionId}' not found.`
+        message: `Session with ID '${sessionId}' not found.`,
       },
-      404
+      404,
     );
   }
 
   // Ownership verification: Users can only revoke their own sessions (admins can revoke any)
-  if (session.userId !== currentUser.userId && currentUser.role !== 'admin') {
+  if (session.userId !== currentUser.userId && currentUser.role !== "admin") {
     return c.json(
       {
         success: false,
-        message: 'Access denied: You cannot terminate sessions belonging to other users.'
+        message: "Access denied: You cannot terminate sessions belonging to other users.",
       },
-      403
+      403,
     );
   }
 
   // Deactivate session and purge associated refresh tokens
   await prisma.session.update({
     where: { id: sessionId },
-    data: { isActive: false }
+    data: { isActive: false },
   });
 
   await prisma.refreshToken.deleteMany({
-    where: { sessionId }
+    where: { sessionId },
   });
 
   return c.json({
     success: true,
-    message: `Session '${sessionId}' has been revoked successfully.`
+    message: `Session '${sessionId}' has been revoked successfully.`,
   });
 });
 
@@ -89,20 +89,20 @@ sessionRoutes.delete('/:sessionId', async (c) => {
  * POST /api/sessions/revoke-all
  * Invalidates all active sessions for the current user across all devices.
  */
-sessionRoutes.post('/revoke-all', async (c) => {
-  const currentUser = c.get('user');
+sessionRoutes.post("/revoke-all", async (c) => {
+  const currentUser = c.get("user");
 
   await prisma.session.updateMany({
     where: { userId: currentUser.userId, isActive: true },
-    data: { isActive: false }
+    data: { isActive: false },
   });
 
   await prisma.refreshToken.deleteMany({
-    where: { userId: currentUser.userId }
+    where: { userId: currentUser.userId },
   });
 
   return c.json({
     success: true,
-    message: 'All active sessions have been revoked. You must log in again.'
+    message: "All active sessions have been revoked. You must log in again.",
   });
 });

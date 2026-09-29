@@ -28,3 +28,13 @@ jobs:
 
       - name: 🔎 Verificación de tipos TypeScript (Build)
         run: npm run build
+
+      - name: ⚡ Linting & Formatting Check (Biome)
+        run: npm run lint
+
+      - name: 🧪 Ejecutar Tests Automatizados (Vitest)
+        run: npm test
+        env:
+          JWT_SECRET: "ci_jwt_secret_test_key_at_least_32_chars_long"
+          JWT_REFRESH_SECRET: "ci_jwt_refresh_secret_test_key_at_least_32_chars"
+          NODE_ENV: "test"

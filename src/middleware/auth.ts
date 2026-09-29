@@ -10,45 +10,45 @@
  *    Allows instant session revocation without waiting for the JWT expiry.
  */
 
-import { Context, Next } from 'hono';
-import { verify } from 'hono/jwt';
-import { JwtPayload, AppEnv } from '../types/index.js';
-import { env } from '../config/env.js';
-import { prisma } from '../db.js';
+import type { Context, Next } from "hono";
+import { verify } from "hono/jwt";
+import { env } from "../config/env.js";
+import { prisma } from "../db.js";
+import type { AppEnv, JwtPayload } from "../types/index.js";
 
 export async function authMiddleware(c: Context<AppEnv>, next: Next) {
-  const authHeader = c.req.header('Authorization');
+  const authHeader = c.req.header("Authorization");
 
   // Verify Bearer schema structure
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  if (!authHeader?.startsWith("Bearer ")) {
     return c.json(
       {
         success: false,
-        message: 'Unauthorized: Missing or malformed Bearer Token in Authorization header.'
+        message: "Unauthorized: Missing or malformed Bearer Token in Authorization header.",
       },
-      401
+      401,
     );
   }
 
-  const token = authHeader.split(' ')[1];
+  const token = authHeader.split(" ")[1];
 
   try {
     // Decode and cryptographically verify the JWT signature
-    const payload = (await verify(token, env.JWT_SECRET, 'HS256')) as unknown as JwtPayload;
+    const payload = (await verify(token, env.JWT_SECRET, "HS256")) as unknown as JwtPayload;
 
     // 1. Verify user existence and real-time suspension state
     const user = await prisma.user.findUnique({
       where: { id: payload.userId },
-      select: { id: true, isBlocked: true, blockedReason: true }
+      select: { id: true, isBlocked: true, blockedReason: true },
     });
 
     if (!user) {
       return c.json(
         {
           success: false,
-          message: 'Unauthorized: Account associated with this token no longer exists.'
+          message: "Unauthorized: Account associated with this token no longer exists.",
         },
-        401
+        401,
       );
     }
 
@@ -56,40 +56,40 @@ export async function authMiddleware(c: Context<AppEnv>, next: Next) {
       return c.json(
         {
           success: false,
-          message: `Access denied: Account has been suspended. Reason: ${user.blockedReason || 'Policy violation'}.`
+          message: `Access denied: Account has been suspended. Reason: ${user.blockedReason || "Policy violation"}.`,
         },
-        403
+        403,
       );
     }
 
     // 2. Stateful session check: Verify that the session is active in database
     if (payload.sessionId) {
       const session = await prisma.session.findUnique({
-        where: { id: payload.sessionId }
+        where: { id: payload.sessionId },
       });
 
-      if (!session || !session.isActive || session.expiresAt < new Date()) {
+      if (!session?.isActive || session.expiresAt < new Date()) {
         return c.json(
           {
             success: false,
-            message: 'Session has been revoked or expired. Please sign in again.'
+            message: "Session has been revoked or expired. Please sign in again.",
           },
-          401
+          401,
         );
       }
     }
 
     // Attach decoded user identity to context
-    c.set('user', payload);
+    c.set("user", payload);
     await next();
   } catch (error) {
     return c.json(
       {
         success: false,
-        message: 'Invalid or expired authentication token.',
-        error: error instanceof Error ? error.message : 'Unknown error'
+        message: "Invalid or expired authentication token.",
+        error: error instanceof Error ? error.message : "Unknown error",
       },
-      401
+      401,
     );
   }
 }

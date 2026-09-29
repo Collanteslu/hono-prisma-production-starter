@@ -52,7 +52,7 @@ export interface JwtPayload {
   userId: string;
   sessionId: string;
   email: string;
-  role: 'admin' | 'user';
+  role: "admin" | "user";
   exp: number;
 }
 

@@ -3,7 +3,7 @@
  * @description Cryptographic password hashing and verification utility using bcryptjs.
  */
 
-import bcrypt from 'bcryptjs';
+import bcrypt from "bcryptjs";
 
 /** Number of salt rounds for key derivation */
 const SALT_ROUNDS = 10;

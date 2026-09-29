@@ -247,13 +247,36 @@ sequenceDiagram
 
 ---
 
-## 🧪 Automated Test Suite
+## 🧪 Automated Testing & Code Quality
 
-Run the full end-to-end automated test suite:
+### 1. In-Memory Native Tests (Vitest)
+Executes high-speed TypeScript unit and integration tests using Hono's in-memory `app.request()` without needing an external HTTP listener:
 
 ```bash
-# Ensure server is running in another terminal, then execute:
-./test-api.sh
+# Run all tests once
+npm test
+
+# Run tests in interactive watch mode
+npm run test:watch
+```
+
+### 2. End-to-End Shell Suite (curl)
+Runs end-to-end HTTP tests against an active server instance:
+
+```bash
+# Ensure server is running (npm run dev), then execute:
+npm run test:e2e
+```
+
+### 3. Code Formatting & Linting (Biome)
+Fast Rust-powered linter and formatter:
+
+```bash
+# Check code style and lint rules
+npm run lint
+
+# Automatically format and fix issues
+npm run lint:fix
 ```
 
 **Test Coverage Highlights:**
@@ -318,3 +341,4 @@ This repository is equipped with built-in agent **Skills** located in [`.agents/
 | **OpenAPI Documentation** | [`.agents/skills/openapi-documentation`](.agents/skills/openapi-documentation/SKILL.md) | Procedures for maintaining OpenAPI 3.0 schemas and the interactive Scalar UI |
 | **Prisma Database Ops** | [`.agents/skills/prisma-database-ops`](.agents/skills/prisma-database-ops/SKILL.md) | Runbook for schema changes, SQLite Driver Adapters, Studio inspection, and resets |
 | **Bruno API Testing** | [`.agents/skills/bruno-testing`](.agents/skills/bruno-testing/SKILL.md) | Guide for creating offline-first Git-versioned requests in Bruno with auto-token propagation |
+| **Docker Deployment** | [`.agents/skills/docker-deployment`](.agents/skills/docker-deployment/SKILL.md) | Runbook for containerization, multi-stage builds, non-root security, and SQLite backups |

@@ -4,13 +4,16 @@
  * Keeps the SQLite database performant and prevents storage bloat.
  */
 
-import { prisma } from '../db.js';
+import { prisma } from "../db.js";
 
 /**
  * Executes a cleanup cycle deleting expired sessions and tokens.
  * @returns Counts of purged database rows
  */
-export async function cleanupExpiredSessions(): Promise<{ deletedSessions: number; deletedTokens: number }> {
+export async function cleanupExpiredSessions(): Promise<{
+  deletedSessions: number;
+  deletedTokens: number;
+}> {
   try {
     const now = new Date();
 
@@ -22,31 +25,31 @@ export async function cleanupExpiredSessions(): Promise<{ deletedSessions: numbe
             { expiresAt: { lt: now } },
             {
               isActive: false,
-              updatedAt: { lt: new Date(now.getTime() - 24 * 60 * 60 * 1000) }
-            }
-          ]
-        }
+              updatedAt: { lt: new Date(now.getTime() - 24 * 60 * 60 * 1000) },
+            },
+          ],
+        },
       }),
       // 2. Purge expired refresh tokens
       prisma.refreshToken.deleteMany({
         where: {
-          expiresAt: { lt: now }
-        }
-      })
+          expiresAt: { lt: now },
+        },
+      }),
     ]);
 
     if (sessionsRes.count > 0 || tokensRes.count > 0) {
       console.log(
-        `🧹 [Cleanup Routine] Purged ${sessionsRes.count} expired session(s) and ${tokensRes.count} token(s).`
+        `🧹 [Cleanup Routine] Purged ${sessionsRes.count} expired session(s) and ${tokensRes.count} token(s).`,
       );
     }
 
     return {
       deletedSessions: sessionsRes.count,
-      deletedTokens: tokensRes.count
+      deletedTokens: tokensRes.count,
     };
   } catch (error) {
-    console.error('❌ Error during session cleanup routine:', error);
+    console.error("❌ Error during session cleanup routine:", error);
     return { deletedSessions: 0, deletedTokens: 0 };
   }
 }
