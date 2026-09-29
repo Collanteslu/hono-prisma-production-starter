@@ -1,58 +1,20 @@
 /**
  * @file index.ts
- * @description Core TypeScript type definitions and interfaces for domain models,
- * JWT authentication payloads, Hono application context variables, and pagination metadata.
+ * @description Core TypeScript type definitions for JWT authentication payloads,
+ * Hono application context variables, and response metadata.
  */
 
-/**
- * User domain entity model representing application accounts.
- */
-export interface User {
-  id: string;
-  name: string;
-  email: string;
-  password: string;
-  role: string;
-  isBlocked: boolean;
-  blockedReason?: string | null;
-  createdAt: string;
-}
+export type Role = "admin" | "user";
 
 /**
- * Session domain entity representing active login sessions persisted in SQLite.
- * Used for stateful session validation and real-time revocation.
- */
-export interface Session {
-  id: string;
-  userId: string;
-  userAgent?: string | null;
-  ipAddress?: string | null;
-  isActive: boolean;
-  expiresAt: string;
-  createdAt: string;
-}
-
-/**
- * Task domain entity model representing items associated with a specific User.
- */
-export interface Task {
-  id: string;
-  userId: string;
-  title: string;
-  description: string;
-  completed: boolean;
-  createdAt: string;
-}
-
-/**
- * JWT payload structure signed into access and refresh tokens.
+ * JWT payload structure signed into access tokens.
  * Includes sessionId to enable real-time session checking against SQLite.
  */
 export interface JwtPayload {
   userId: string;
   sessionId: string;
   email: string;
-  role: "admin" | "user";
+  role: Role;
   exp: number;
 }
 

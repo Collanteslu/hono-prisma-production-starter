@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { prisma } from "../src/db.js";
 import app from "../src/index.js";
+import { hashToken } from "../src/services/sessions.js";
 
 describe("Authentication & Session API", () => {
   let accessToken = "";
@@ -75,6 +77,12 @@ describe("Authentication & Session API", () => {
   });
 
   it("POST /api/auth/refresh reusing an already rotated token should terminate session", async () => {
+    // Simulate that the rotation happened long ago (outside the concurrent-refresh grace period)
+    await prisma.refreshToken.update({
+      where: { tokenHash: hashToken(refreshToken) },
+      data: { usedAt: new Date(Date.now() - 60 * 60 * 1000) },
+    });
+
     // Re-submit the old (already rotated) refresh token
     const res = await app.request("/api/auth/refresh", {
       method: "POST",

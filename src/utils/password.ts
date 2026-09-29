@@ -3,10 +3,22 @@
  * @description Cryptographic password hashing and verification utility using bcryptjs.
  */
 
+import { randomUUID } from "node:crypto";
 import bcrypt from "bcryptjs";
 
 /** Number of salt rounds for key derivation */
-const SALT_ROUNDS = 10;
+const SALT_ROUNDS = 12;
+
+let dummyHash: Promise<string> | undefined;
+
+/**
+ * Returns a real bcrypt hash (same cost factor as stored passwords) of a random secret.
+ * Compared against when a login email does not exist, so both paths take the same time.
+ */
+export function getDummyHash(): Promise<string> {
+  dummyHash ??= hashPassword(randomUUID());
+  return dummyHash;
+}
 
 /**
  * Hashes a plaintext password using bcrypt with an automatically generated salt.

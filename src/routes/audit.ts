@@ -5,8 +5,11 @@
 
 import { Hono } from "hono";
 import { prisma } from "../db.js";
-import { successResponse } from "../lib/response.js";
-import type { AppEnv, PaginationMeta } from "../types/index.js";
+import type { AuditLogWhereInput } from "../generated/client/models.js";
+import { parseAuditDetails } from "../lib/audit.js";
+import { buildPagination, successResponse } from "../lib/response.js";
+import { requireAdmin } from "../middleware/auth.js";
+import type { AppEnv } from "../types/index.js";
 
 export const auditRoutes = new Hono<AppEnv>();
 
@@ -14,27 +17,18 @@ export const auditRoutes = new Hono<AppEnv>();
  * GET /api/audit-logs
  * Retrieves security and action audit logs (Admin only).
  */
-auditRoutes.get("/", async (c) => {
-  const currentUser = c.get("user");
-  if (currentUser.role !== "admin") {
-    return c.json(
-      {
-        success: false,
-        message: "Forbidden: Only administrators can access audit logs.",
-      },
-      403,
-    );
-  }
-
+auditRoutes.get("/", requireAdmin, async (c) => {
   const page = Math.max(1, Number(c.req.query("page")) || 1);
   const limit = Math.min(100, Math.max(1, Number(c.req.query("limit")) || 20));
   const skip = (page - 1) * limit;
   const entity = c.req.query("entity");
   const action = c.req.query("action");
+  const userId = c.req.query("userId");
 
-  const where: Record<string, unknown> = {};
+  const where: AuditLogWhereInput = {};
   if (entity) where.entity = entity;
   if (action) where.action = action;
+  if (userId) where.userId = userId;
 
   const [total, logs] = await Promise.all([
     prisma.auditLog.count({ where }),
@@ -49,23 +43,9 @@ auditRoutes.get("/", async (c) => {
     }),
   ]);
 
-  const totalPages = Math.ceil(total / limit) || 1;
-  const pagination: PaginationMeta = {
-    total,
-    page,
-    limit,
-    totalPages,
-    hasNextPage: page < totalPages,
-    hasPrevPage: page > 1,
-  };
-
   return successResponse(
     c,
-    logs.map((l) => ({
-      ...l,
-      createdAt: l.createdAt.toISOString(),
-      details: l.details ? JSON.parse(l.details) : null,
-    })),
-    { pagination },
+    logs.map((l) => ({ ...l, details: parseAuditDetails(l.details) })),
+    { pagination: buildPagination(total, page, limit) },
   );
 });

@@ -1,12 +1,14 @@
 /**
  * @file rateLimit.ts
- * @description In-memory IP rate limiter middleware designed to protect sensitive endpoints
- * (e.g. login, token refresh) against brute-force and Denial-of-Service attacks.
+ * @description In-memory rate limiter middleware designed to protect sensitive endpoints
+ * (e.g. login, token refresh, registration) against brute-force and Denial-of-Service attacks.
+ *
+ * Note: counters live in process memory, so limits apply per instance. Use a shared store
+ * (e.g. Redis) if the API is ever scaled horizontally.
  */
 
-import { getConnInfo } from "@hono/node-server/conninfo";
 import type { Context, Next } from "hono";
-import { env } from "../config/env.js";
+import { getClientIp } from "../lib/clientIp.js";
 
 interface RateLimitRecord {
   count: number;
@@ -33,28 +35,8 @@ export function rateLimiter(windowMs: number = 60_000, maxRequests: number = 10)
   interval.unref?.();
 
   return async (c: Context, next: Next) => {
-    // Extract client IP address securely:
-    // Only trust reverse-proxy headers (CF-Connecting-IP / X-Forwarded-For / X-Real-IP) if TRUST_PROXY is explicitly enabled.
-    // When TRUST_PROXY is false, reverse-proxy headers are strictly ignored to prevent spoofing bypass attacks.
-    let ip: string | undefined;
-
-    if (env.TRUST_PROXY) {
-      ip =
-        c.req.header("cf-connecting-ip")?.trim() ||
-        c.req.header("x-forwarded-for")?.split(",")[0].trim() ||
-        c.req.header("x-real-ip")?.trim();
-    }
-
-    if (!ip) {
-      try {
-        const conn = getConnInfo(c);
-        ip = conn?.remote?.address;
-      } catch {
-        // Fallback for mocked or non-socket environments (e.g., unit tests)
-      }
-    }
-
-    ip = ip || "127.0.0.1";
+    // Proxy headers are only honoured when TRUST_PROXY is enabled (see getClientIp)
+    const ip = getClientIp(c) || "127.0.0.1";
 
     const now = Date.now();
     const clientRecord = ipStore.get(ip);
@@ -94,5 +76,42 @@ export function rateLimiter(windowMs: number = 60_000, maxRequests: number = 10)
     c.header("X-RateLimit-Remaining", (maxRequests - clientRecord.count).toString());
 
     await next();
+  };
+}
+
+/**
+ * Tracks failed login attempts per account to lock out credential stuffing
+ * that rotates source IPs. Successful logins clear the counter.
+ */
+export function createLoginLockout(maxFailures = 5, lockoutMs = 15 * 60_000) {
+  const failures = new Map<string, RateLimitRecord>();
+
+  const interval = setInterval(() => {
+    const now = Date.now();
+    for (const [key, record] of failures.entries()) {
+      if (now > record.resetAt) failures.delete(key);
+    }
+  }, lockoutMs);
+  interval.unref?.();
+
+  return {
+    /** Seconds until the account unlocks, or 0 if login attempts are allowed */
+    retryAfterSeconds(key: string): number {
+      const record = failures.get(key);
+      if (!record || Date.now() > record.resetAt || record.count < maxFailures) return 0;
+      return Math.ceil((record.resetAt - Date.now()) / 1000);
+    },
+    recordFailure(key: string) {
+      const now = Date.now();
+      const record = failures.get(key);
+      if (!record || now > record.resetAt) {
+        failures.set(key, { count: 1, resetAt: now + lockoutMs });
+      } else {
+        record.count++;
+      }
+    },
+    reset(key: string) {
+      failures.delete(key);
+    },
   };
 }

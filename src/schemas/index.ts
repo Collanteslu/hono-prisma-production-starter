@@ -1,29 +1,60 @@
 import { z } from "zod";
 
+/** Email normalizado (sin espacios y en minúsculas) para búsquedas y unicidad consistentes. */
+const emailField = (requiredMessage: string, formatMessage: string) =>
+  z
+    .string({ required_error: requiredMessage })
+    .trim()
+    .toLowerCase()
+    .email({ message: formatMessage });
+
+/**
+ * Política de contraseñas. bcrypt solo procesa los primeros 72 bytes, por lo que se limita la longitud.
+ */
+const passwordField = z
+  .string({ required_error: "La contraseña es obligatoria" })
+  .min(8, { message: "La contraseña debe tener al menos 8 caracteres" })
+  .max(72, { message: "La contraseña no puede exceder 72 caracteres" });
+
+const nameField = z
+  .string({ required_error: "El nombre es obligatorio" })
+  .trim()
+  .min(2, { message: "El nombre debe tener al menos 2 caracteres" })
+  .max(50, { message: "El nombre no puede exceder 50 caracteres" });
+
 /**
  * Esquema de validación para el inicio de sesión.
  */
 export const loginSchema = z.object({
-  email: z
-    .string({ required_error: "El email es obligatorio" })
-    .email({ message: "El formato del correo electrónico no es válido" }),
+  email: emailField("El email es obligatorio", "El formato del correo electrónico no es válido"),
+  // No se aplica la política de contraseñas en el login para no bloquear cuentas existentes
   password: z
     .string({ required_error: "La contraseña es obligatoria" })
-    .min(6, { message: "La contraseña debe tener al menos 6 caracteres" }),
+    .min(1, { message: "La contraseña es obligatoria" })
+    .max(200),
+});
+
+/**
+ * Esquema para el registro público de cuentas (siempre con rol "user").
+ */
+export const registerSchema = z.object({
+  name: nameField,
+  email: emailField("El email es obligatorio", "El formato de email no es válido"),
+  password: passwordField,
 });
 
 /**
  * Esquema para renovar el Access Token con Refresh Token.
  */
 export const refreshTokenSchema = z.object({
-  refreshToken: z.string({ required_error: "El refreshToken es obligatorio" }),
+  refreshToken: z.string({ required_error: "El refreshToken es obligatorio" }).min(1).max(2048),
 });
 
 /**
  * Esquema para cerrar sesión (Logout).
  */
 export const logoutSchema = z.object({
-  refreshToken: z.string().optional(),
+  refreshToken: z.string().max(2048).optional(),
 });
 
 /**
@@ -38,16 +69,9 @@ export const blockUserSchema = z.object({
  * Esquema para crear un nuevo usuario.
  */
 export const createUserSchema = z.object({
-  name: z
-    .string({ required_error: "El nombre es obligatorio" })
-    .min(2, { message: "El nombre debe tener al menos 2 caracteres" })
-    .max(50, { message: "El nombre no puede exceder 50 caracteres" }),
-  email: z
-    .string({ required_error: "El email es obligatorio" })
-    .email({ message: "El formato de email no es válido" }),
-  password: z
-    .string({ required_error: "La contraseña es obligatoria" })
-    .min(6, { message: "La contraseña debe tener mínimo 6 caracteres" }),
+  name: nameField,
+  email: emailField("El email es obligatorio", "El formato de email no es válido"),
+  password: passwordField,
   role: z.enum(["admin", "user"]).optional().default("user"),
 });
 
@@ -56,9 +80,9 @@ export const createUserSchema = z.object({
  */
 export const updateUserSchema = z
   .object({
-    name: z.string().min(2).max(50).optional(),
-    email: z.string().email({ message: "Formato de email inválido" }).optional(),
-    password: z.string().min(6, { message: "Mínimo 6 caracteres" }).optional(),
+    name: nameField.optional(),
+    email: emailField("El email es obligatorio", "Formato de email inválido").optional(),
+    password: passwordField.optional(),
   })
   .refine((data) => Object.keys(data).length > 0, {
     message: "Debes proporcionar al menos un campo para actualizar (name, email o password)",
@@ -72,7 +96,11 @@ export const createTaskSchema = z.object({
     .string({ required_error: "El título es obligatorio" })
     .min(3, { message: "El título debe tener al menos 3 caracteres" })
     .max(100, { message: "El título no puede exceder 100 caracteres" }),
-  description: z.string().optional().default(""),
+  description: z
+    .string()
+    .max(2000, { message: "La descripción no puede exceder 2000 caracteres" })
+    .optional()
+    .default(""),
   completed: z.boolean().optional().default(false),
 });
 
@@ -82,7 +110,7 @@ export const createTaskSchema = z.object({
 export const updateTaskSchema = z
   .object({
     title: z.string().min(3).max(100).optional(),
-    description: z.string().optional(),
+    description: z.string().max(2000).optional(),
     completed: z.boolean().optional(),
   })
   .refine((data) => Object.keys(data).length > 0, {

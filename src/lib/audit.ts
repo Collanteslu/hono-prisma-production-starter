@@ -5,6 +5,7 @@
 
 import type { Context } from "hono";
 import { prisma } from "../db.js";
+import { getClientIp } from "./clientIp.js";
 import { logger } from "./logger.js";
 
 export interface LogAuditOptions {
@@ -21,11 +22,7 @@ export interface LogAuditOptions {
  */
 export async function recordAudit(c: Context, options: LogAuditOptions): Promise<void> {
   try {
-    const ipAddress =
-      c.req.header("cf-connecting-ip") ||
-      c.req.header("x-forwarded-for")?.split(",")[0].trim() ||
-      c.req.header("x-real-ip") ||
-      null;
+    const ipAddress = getClientIp(c) ?? null;
 
     const userAgent = c.req.header("user-agent") || null;
     const details =
@@ -46,5 +43,17 @@ export async function recordAudit(c: Context, options: LogAuditOptions): Promise
     });
   } catch (error) {
     logger.error({ err: error }, "Failed to persist audit log entry");
+  }
+}
+
+/**
+ * Parses a stored audit `details` value, which may be a JSON document or a plain string.
+ */
+export function parseAuditDetails(details: string | null): unknown {
+  if (!details) return null;
+  try {
+    return JSON.parse(details);
+  } catch {
+    return details;
   }
 }

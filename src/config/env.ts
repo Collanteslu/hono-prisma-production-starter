@@ -29,10 +29,35 @@ const envSchema = z.object({
     .optional()
     .transform((val) => val === "true" || val === "1"),
   ADMIN_EMAIL: z.string().email().optional(),
-  ADMIN_PASSWORD: z.string().min(8).optional(),
+  ADMIN_PASSWORD: z.string().min(8).max(72).optional(),
+  // Comma-separated list of allowed CORS origins ("*" allows any origin)
+  CORS_ORIGINS: z
+    .string()
+    .default("*")
+    .transform((val) =>
+      val
+        .split(",")
+        .map((origin) => origin.trim())
+        .filter(Boolean),
+    ),
+  // Expose /docs and /openapi.json (defaults to true outside production)
+  ENABLE_DOCS: z
+    .string()
+    .optional()
+    .transform((val) => (val === undefined ? undefined : val === "true" || val === "1")),
+  LOGIN_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(10),
+  REFRESH_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(30),
+  REGISTER_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(5),
+  // Seconds during which reusing a just-rotated refresh token is treated as a concurrent refresh
+  REFRESH_REUSE_GRACE_SECONDS: z.coerce.number().int().min(0).default(10),
 });
 
-const parsedEnv = envSchema.safeParse(process.env);
+// Empty variables (e.g. `ADMIN_EMAIL=` from docker-compose defaults) are treated as undefined
+const rawEnv = Object.fromEntries(
+  Object.entries(process.env).filter(([, value]) => value !== undefined && value !== ""),
+);
+
+const parsedEnv = envSchema.safeParse(rawEnv);
 
 if (!parsedEnv.success) {
   console.error("❌ Critical startup failure: Invalid or missing environment configuration:");

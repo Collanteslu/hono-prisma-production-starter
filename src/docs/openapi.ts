@@ -1,3 +1,5 @@
+import { API_VERSION } from "../lib/version.js";
+
 /**
  * Especificación OpenAPI 3.0 completa de la API.
  * Describe esquemas, parámetros de consulta, códigos de respuesta y seguridad JWT.
@@ -6,7 +8,7 @@ export const openApiSpec = {
   openapi: "3.0.3",
   info: {
     title: "Hono REST API - Gestión de Usuarios y Tareas",
-    version: "1.0.0",
+    version: API_VERSION,
     description:
       "API REST profesional construida con Hono, Prisma 7 (SQLite), TypeScript, Zod, Autenticación JWT con Refresh Tokens y Rate Limiting.",
   },
@@ -88,11 +90,40 @@ export const openApiSpec = {
         },
       },
     },
+    "/api/auth/register": {
+      post: {
+        summary: "Registro público de cuentas",
+        description:
+          "Crea una cuenta con rol `user` (cualquier `role` enviado se ignora). Rate limit por IP (5/hora por defecto).",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["name", "email", "password"],
+                properties: {
+                  name: { type: "string", minLength: 2, maxLength: 50, example: "Carlos López" },
+                  email: { type: "string", format: "email", example: "carlos@example.com" },
+                  password: { type: "string", minLength: 8, maxLength: 72, example: "password123" },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          "201": { description: "Cuenta creada" },
+          "400": { description: "Error de validación Zod" },
+          "409": { description: "Email duplicado" },
+          "429": { description: "Rate limit excedido" },
+        },
+      },
+    },
     "/api/auth/login": {
       post: {
         summary: "Inicio de sesión (Login)",
         description:
-          "Autentica credenciales y emite Access Token (15 min) y Refresh Token (7 días). Protegido por Rate Limiter.",
+          "Autentica credenciales y emite Access Token (15 min) y Refresh Token (7 días). Protegido por rate limit por IP y bloqueo por cuenta tras 5 intentos fallidos (15 min).",
         requestBody: {
           required: true,
           content: {
@@ -102,7 +133,7 @@ export const openApiSpec = {
                 required: ["email", "password"],
                 properties: {
                   email: { type: "string", format: "email", example: "admin@example.com" },
-                  password: { type: "string", minLength: 6, example: "password123" },
+                  password: { type: "string", example: "password123" },
                 },
               },
             },
@@ -110,16 +141,18 @@ export const openApiSpec = {
         },
         responses: {
           "200": { description: "Login exitoso" },
-          "400": { description: "Error de validación Zod" },
+          "400": { description: "Error de validación Zod o JSON mal formado" },
           "401": { description: "Credenciales inválidas" },
-          "429": { description: "Rate limit excedido" },
+          "403": { description: "Cuenta suspendida" },
+          "429": { description: "Rate limit excedido o cuenta bloqueada temporalmente" },
         },
       },
     },
     "/api/auth/refresh": {
       post: {
         summary: "Renovar Access Token (Token Rotation)",
-        description: "Intercambia un Refresh Token válido por un nuevo par de tokens.",
+        description:
+          "Intercambia un Refresh Token válido por un nuevo par de tokens. Cada refresh token solo puede usarse una vez: reutilizarlo dentro del periodo de gracia devuelve 409 (refresh concurrente); después se considera robo y la sesión se revoca.",
         requestBody: {
           required: true,
           content: {
@@ -136,21 +169,24 @@ export const openApiSpec = {
         },
         responses: {
           "200": { description: "Tokens renovados" },
-          "401": { description: "Refresh token expirado o revocado" },
+          "401": { description: "Refresh token inválido, expirado, revocado o reutilizado" },
+          "403": { description: "Cuenta suspendida o eliminada" },
+          "409": { description: "El token ya fue rotado por una petición concurrente" },
+          "429": { description: "Rate limit excedido" },
         },
       },
     },
     "/api/auth/logout": {
       post: {
         summary: "Cierre de sesión (Logout)",
-        description: "Revoca el refresh token en la base de datos invalidando la sesión.",
+        description:
+          "Revoca la sesión asociada al Bearer token y/o al refresh token enviado (ambos opcionales).",
         requestBody: {
           required: true,
           content: {
             "application/json": {
               schema: {
                 type: "object",
-                required: ["refreshToken"],
                 properties: {
                   refreshToken: { type: "string" },
                 },
@@ -234,7 +270,9 @@ export const openApiSpec = {
         },
       },
       post: {
-        summary: "Crear usuario",
+        summary: "Crear usuario (Solo Admin)",
+        description:
+          "Permite asignar cualquier rol. El registro público está en POST /api/auth/register.",
         security: [{ BearerAuth: [] }],
         requestBody: {
           required: true,
@@ -246,7 +284,7 @@ export const openApiSpec = {
                 properties: {
                   name: { type: "string", example: "Carlos López" },
                   email: { type: "string", format: "email", example: "carlos@example.com" },
-                  password: { type: "string", minLength: 6, example: "secret123" },
+                  password: { type: "string", minLength: 8, maxLength: 72, example: "secret123" },
                   role: { type: "string", enum: ["admin", "user"], default: "user" },
                 },
               },
@@ -255,6 +293,7 @@ export const openApiSpec = {
         },
         responses: {
           "201": { description: "Usuario creado" },
+          "403": { description: "Acceso exclusivo para administradores" },
           "409": { description: "Email duplicado" },
         },
       },
@@ -294,7 +333,7 @@ export const openApiSpec = {
                 properties: {
                   name: { type: "string", example: "Nuevo Nombre" },
                   email: { type: "string", format: "email" },
-                  password: { type: "string", minLength: 6 },
+                  password: { type: "string", minLength: 8, maxLength: 72 },
                 },
               },
             },
@@ -484,6 +523,20 @@ export const openApiSpec = {
         responses: {
           "200": { description: "Tarea soft-deleted o permanentemente eliminada" },
           "403": { description: "No te pertenece" },
+          "404": { description: "No existe (o ya está eliminada, salvo con ?permanent=true)" },
+        },
+      },
+    },
+    "/api/tasks/{id}/restore": {
+      post: {
+        summary: "Restaurar tarea eliminada (Soft Delete)",
+        security: [{ BearerAuth: [] }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        responses: {
+          "200": { description: "Tarea restaurada" },
+          "403": { description: "No te pertenece" },
+          "404": { description: "Tarea no encontrada" },
+          "409": { description: "La tarea no está eliminada" },
         },
       },
     },
@@ -491,7 +544,7 @@ export const openApiSpec = {
       get: {
         summary: "Consultar registros de auditoría y trazabilidad (Solo Admin)",
         description:
-          "Permite auditar mutaciones del sistema (CREATE, UPDATE, SOFT_DELETE, DELETE_PERMANENT, BLOCK).",
+          "Permite auditar acciones del sistema (LOGIN, LOGIN_FAILED, LOGOUT, REGISTER, CREATE, UPDATE, PASSWORD_CHANGE, SOFT_DELETE, RESTORE, DELETE_PERMANENT, BLOCK, UNBLOCK, REVOKE_SESSION, REVOKE_ALL_SESSIONS, TOKEN_REUSE_DETECTED).",
         security: [{ BearerAuth: [] }],
         parameters: [
           { name: "page", in: "query", schema: { type: "integer", default: 1 } },
@@ -506,6 +559,12 @@ export const openApiSpec = {
             name: "action",
             in: "query",
             description: "Filtrar por tipo de acción",
+            schema: { type: "string" },
+          },
+          {
+            name: "userId",
+            in: "query",
+            description: "Filtrar por el usuario que realizó la acción",
             schema: { type: "string" },
           },
         ],
