@@ -11,6 +11,8 @@ import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import { prisma } from "../db.js";
 import type { TaskWhereInput } from "../generated/client/models.js";
+import { recordAudit } from "../lib/audit.js";
+import { parseFilters, parseSorting } from "../lib/query.js";
 import { parseIncludes } from "../lib/relations.js";
 import { successResponse } from "../lib/response.js";
 import { createTaskSchema, taskQuerySchema, updateTaskSchema } from "../schemas/index.js";
@@ -38,13 +40,19 @@ taskRoutes.get(
   }),
   async (c) => {
     const currentUser = c.get("user");
-    const { page, limit, search, completed, sortBy, order } = c.req.valid("query");
+    const { page, limit, search, completed, sortBy, order, sort, includeDeleted } =
+      c.req.valid("query");
     const skip = (page - 1) * limit;
 
     // Strict ownership filter: Always scope to the token's authenticated userId
     const where: TaskWhereInput = {
       userId: currentUser.userId,
     };
+
+    // Soft delete filter: By default, exclude soft-deleted tasks unless explicitly requested
+    if (includeDeleted !== "true") {
+      where.deletedAt = null;
+    }
 
     if (completed !== undefined) {
       where.completed = completed === "true";
@@ -53,6 +61,17 @@ taskRoutes.get(
     if (search) {
       where.OR = [{ title: { contains: search } }, { description: { contains: search } }];
     }
+
+    // Apply generic filter[...] parameters
+    const dynamicFilters = parseFilters(c.req.query(), {
+      allowedFields: ["title", "description", "completed"],
+    });
+    Object.assign(where, dynamicFilters);
+
+    // Apply sorting (prioritize ?sort=-field if provided, fallback to sortBy & order)
+    const orderBy = sort
+      ? parseSorting(sort, { allowedFields: ["createdAt", "title", "completed"] })
+      : { [sortBy]: order };
 
     const include = parseIncludes(c.req.query("include"), {
       user: { select: { id: true, name: true, email: true, role: true } },
@@ -64,7 +83,7 @@ taskRoutes.get(
         where,
         skip,
         take: limit,
-        orderBy: { [sortBy]: order },
+        orderBy,
         include,
       }),
     ]);
@@ -84,6 +103,7 @@ taskRoutes.get(
       tasks.map((t) => ({
         ...t,
         createdAt: t.createdAt.toISOString(),
+        deletedAt: t.deletedAt ? t.deletedAt.toISOString() : null,
       })),
       { pagination },
     );
@@ -165,11 +185,20 @@ taskRoutes.post(
       },
     });
 
+    await recordAudit(c, {
+      userId: currentUser.userId,
+      action: "CREATE",
+      entity: "Task",
+      entityId: newTask.id,
+      details: { title: newTask.title },
+    });
+
     return successResponse(
       c,
       {
         ...newTask,
         createdAt: newTask.createdAt.toISOString(),
+        deletedAt: null,
       },
       {
         status: 201,
@@ -237,11 +266,20 @@ taskRoutes.put(
       },
     });
 
+    await recordAudit(c, {
+      userId: currentUser.userId,
+      action: "UPDATE",
+      entity: "Task",
+      entityId: updatedTask.id,
+      details: { changedFields: Object.keys(c.req.valid("json")) },
+    });
+
     return successResponse(
       c,
       {
         ...updatedTask,
         createdAt: updatedTask.createdAt.toISOString(),
+        deletedAt: updatedTask.deletedAt ? updatedTask.deletedAt.toISOString() : null,
       },
       { message: "Task updated successfully." },
     );
@@ -250,11 +288,12 @@ taskRoutes.put(
 
 /**
  * DELETE /api/tasks/:id
- * Deletes a task ensuring ownership verification.
+ * Soft deletes a task by setting deletedAt timestamp, or permanently deletes if ?permanent=true.
  */
 taskRoutes.delete("/:id", async (c) => {
   const id = c.req.param("id");
   const currentUser = c.get("user");
+  const isPermanent = c.req.query("permanent") === "true";
 
   const existingTask = await prisma.task.findUnique({
     where: { id },
@@ -281,16 +320,45 @@ taskRoutes.delete("/:id", async (c) => {
     );
   }
 
-  const deletedTask = await prisma.task.delete({
+  if (isPermanent) {
+    await prisma.task.delete({
+      where: { id },
+    });
+
+    await recordAudit(c, {
+      userId: currentUser.userId,
+      action: "DELETE_PERMANENT",
+      entity: "Task",
+      entityId: id,
+    });
+
+    return successResponse(
+      c,
+      { id, deletedPermanently: true },
+      { message: "Task permanently deleted." },
+    );
+  }
+
+  // Soft delete
+  const softDeleted = await prisma.task.update({
     where: { id },
+    data: { deletedAt: new Date() },
+  });
+
+  await recordAudit(c, {
+    userId: currentUser.userId,
+    action: "SOFT_DELETE",
+    entity: "Task",
+    entityId: id,
   });
 
   return successResponse(
     c,
     {
-      ...deletedTask,
-      createdAt: deletedTask.createdAt.toISOString(),
+      ...softDeleted,
+      createdAt: softDeleted.createdAt.toISOString(),
+      deletedAt: softDeleted.deletedAt?.toISOString() || null,
     },
-    { message: "Task deleted successfully." },
+    { message: "Task soft-deleted successfully." },
   );
 });

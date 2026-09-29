@@ -88,4 +88,71 @@ describe("Tasks CRUD & Ownership API", () => {
     expect(data.data[0].user.email).toBeDefined();
     expect(data.data[0].user.password).toBeUndefined(); // Sensitive fields protected
   });
+
+  it("GET /api/tasks?filter[completed]=true should filter tasks dynamically", async () => {
+    const res = await app.request("/api/tasks?filter[completed]=true", {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${userToken}`,
+      },
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.success).toBe(true);
+    for (const task of body.data) {
+      expect(task.completed).toBe(true);
+    }
+  });
+
+  it("DELETE /api/tasks/:id should soft delete by default, and exclude it from normal listings", async () => {
+    // 1. Create a task to delete
+    const createRes = await app.request("/api/tasks", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${userToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        title: "Task to be soft deleted",
+        description: "Soft deletion test",
+      }),
+    });
+    const created = await createRes.json();
+    const taskId = created.data.id;
+
+    // 2. Soft delete
+    const delRes = await app.request(`/api/tasks/${taskId}`, {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${userToken}`,
+      },
+    });
+    expect(delRes.status).toBe(200);
+    const delBody = await delRes.json();
+    expect(delBody.data.deletedAt).not.toBeNull();
+
+    // 3. Normal list should NOT contain the task
+    const listRes = await app.request("/api/tasks", {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${userToken}`,
+      },
+    });
+    const listBody = await listRes.json();
+    const found = listBody.data.find((t: { id: string }) => t.id === taskId);
+    expect(found).toBeUndefined();
+
+    // 4. Listing with includeDeleted=true should contain the task
+    const listWithDeletedRes = await app.request("/api/tasks?includeDeleted=true", {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${userToken}`,
+      },
+    });
+    const listWithDeletedBody = await listWithDeletedRes.json();
+    const foundDeleted = listWithDeletedBody.data.find((t: { id: string }) => t.id === taskId);
+    expect(foundDeleted).toBeDefined();
+    expect(foundDeleted.deletedAt).not.toBeNull();
+  });
 });

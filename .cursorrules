@@ -1,0 +1,26 @@
+# Hono + Prisma Enterprise Rules & Guidelines
+
+You are an expert engineer working on this production REST API built with Hono v4, Prisma 7 (@prisma/adapter-libsql), SQLite/Turso, Zod, and Biome.
+
+## Core Rules & Architecture
+1. **Response Envelope**:
+   - Always return responses using the standardized envelope `successResponse(c, data, { status, message, pagination })` from `src/lib/response.ts`.
+   - Never return raw objects without `success: true` or timing metadata.
+
+2. **Relational Expansion**:
+   - For all `findMany` and `findUnique` operations that accept relationships, use `parseIncludes(c.req.query("include"), allowedMap)` from `src/lib/relations.ts`.
+   - Always sanitize sensitive fields (e.g. `password`) from returned relations.
+
+3. **Dynamic Filters & Sorting**:
+   - Use `parseFilters(c.req.query(), { allowedFields: [...] })` and `parseSorting(sort, { allowedFields: [...] })` from `src/lib/query.ts`.
+   - Respect soft deletion (`deletedAt: null`) by default unless `includeDeleted === "true"`.
+
+4. **Security & Ownership**:
+   - For user-scoped resources (e.g., tasks), always enforce ownership checks: `resource.userId === currentUser.userId`.
+   - Record significant audit events (create, update, delete, block) using `recordAudit(c, { ... })` from `src/lib/audit.ts`.
+
+5. **Type Safety & RPC**:
+   - Always chain route definitions in `src/index.ts` and maintain `export type AppType = typeof routes;` for `@hono/rpc` type generation.
+
+6. **Tooling & Formatting**:
+   - Run Biome (`npx @biomejs/biome check --write .`) and ensure `npm run build && npm test` passes with 100% green before opening PRs.

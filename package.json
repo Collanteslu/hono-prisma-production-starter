@@ -13,7 +13,8 @@
     "test:e2e": "bash test-api.sh",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
-    "format": "biome format --write ."
+    "format": "biome format --write .",
+    "prepare": "husky"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.1",
@@ -32,10 +33,17 @@
     "@biomejs/biome": "^2.5.14",
     "@types/bcryptjs": "^2.4.6",
     "@types/node": "^26.6.3",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.6.0",
     "pino-pretty": "^13.1.3",
     "prisma": "^7.10.0",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vitest": "^5.0.2"
+  },
+  "lint-staged": {
+    "*.{ts,js,json}": [
+      "biome check --write"
+    ]
   }
 }
