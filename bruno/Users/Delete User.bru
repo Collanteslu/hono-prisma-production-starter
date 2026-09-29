@@ -14,3 +14,7 @@ params:query {
   ~permanent: true
 }
 
+docs {
+  Soft delete por defecto (revoca todas las sesiones); una cuenta eliminada no puede reactivarse.
+  ?permanent=true borra físicamente en cascada. El último administrador activo no puede eliminarse.
+}

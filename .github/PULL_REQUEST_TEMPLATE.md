@@ -17,6 +17,9 @@ Closes #
 ## ✅ Lista de Verificación (Checklist)
 
 - [ ] Mi código sigue las convenciones y tipado estricto de TypeScript del proyecto.
-- [ ] He ejecutado `npm run build` y compila sin errores.
-- [ ] He probado los cambios localmente con `./test-api.sh` o Bruno.
-- [ ] He actualizado la documentación en el `README.md` o en OpenAPI si aplica.
+- [ ] He ejecutado `npm run typecheck`, `npm run lint` y `npm test` y todo pasa.
+- [ ] Si toqué autenticación o sesiones, he probado con `npm run test:e2e` o con la colección de Bruno.
+- [ ] Si cambié `prisma/schema.prisma`, he incluido la migración (`npm run db:migrate -- --name ...`) y ejecutado `npm run db:generate`.
+- [ ] Si añadí o cambié un endpoint, lo he declarado con `createRoute` (la especificación OpenAPI se genera sola) y actualizado la colección de `bruno/`.
+- [ ] He actualizado el `README.md` si cambia el comportamiento o la configuración.
+- [ ] No incluyo secretos, tokens ni archivos `.env`.

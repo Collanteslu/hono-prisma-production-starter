@@ -1,69 +1,75 @@
 ---
 name: docker-deployment
-description: Enterprise Docker containerization, multi-stage builds, non-root security, persistent volume management, and backup operations for SQLite/Turso.
+description: Docker containerization, multi-stage builds, non-root security, persistent volume management, migrations and backup operations for SQLite/Turso.
 ---
 
 # Docker Deployment Runbook
 
 ## Overview
-This runbook provides standardized procedures for building, testing, deploying, and maintaining the containerized REST API using Docker and Docker Compose.
+Standard procedures for building, deploying and maintaining the containerized REST API with Docker and Docker Compose.
 
 ---
 
 ## 1. Multi-Stage Dockerfile Architecture
 
-The `Dockerfile` is structured in three stages:
-1. **deps**: Installs production & development dependencies and generates the Prisma 7 client.
-2. **builder**: Compiles TypeScript files into `dist/` using strict checking (`npm run build`).
-3. **runner**: Minimal Alpine Linux runtime:
-   - Sets `NODE_ENV=production`.
-   - Runs as non-privileged system user (`USER node`).
-   - Only includes compiled `dist/`, production `node_modules/`, and SQLite storage folder.
+Two stages:
+1. **builder** (`node:20-alpine`): `npm ci`, `prisma generate`, `npm run build` → `dist/`.
+2. **runner** (`node:20-alpine`):
+   - `NODE_ENV=production`, runs as the non-root `node` user.
+   - Contains only production dependencies, `dist/`, the generated Prisma client, `prisma/` (schema + migrations) and the entrypoint.
+   - `HEALTHCHECK` calls `GET /healthz` (verifies the process **and** the SQLite query).
+   - `docker-entrypoint.sh` runs `prisma migrate deploy` before starting the server. If it finds an existing database created with the old `db push` flow (Prisma `P3005`), it baselines `0_init` and deploys the rest.
 
 ---
 
 ## 2. Docker Compose Deployment
 
-### Starting the Container
+### Secrets: use a dedicated env file
+`docker-compose.yml` requires `JWT_SECRET` and `JWT_REFRESH_SECRET` (it refuses to start without them) and does **not** contain any secret. Compose also auto-loads a `.env` file next to it, which in a dev checkout holds *development* secrets, so keep production values in a separate git-ignored file and pass it on **every** compose command (Compose evaluates the whole file each time):
+
 ```bash
-docker compose up -d --build
+cat > .env.production <<EOF
+JWT_SECRET=$(openssl rand -base64 48)
+JWT_REFRESH_SECRET=$(openssl rand -base64 48)
+ADMIN_EMAIL=admin@yourdomain.com
+ADMIN_PASSWORD=change-me-please-12345
+EOF
 ```
 
-### Checking Container Health & Logs
-```bash
-# View real-time logs
-docker compose logs -f api
+In production the app also refuses to boot with secrets shorter than 32 characters or identical to each other.
 
-# Verify HTTP healthcheck status
+### Starting, inspecting, stopping
+```bash
+docker compose --env-file .env.production up -d --build
+docker compose --env-file .env.production logs -f api
 curl -i http://localhost:3011/healthz
+docker compose --env-file .env.production down
 ```
 
-### Stopping the Services
-```bash
-docker compose down
-```
+Optional variables (`ENABLE_DOCS`, `LOG_LEVEL`, rate limits, `TRUST_PROXY`, `CORS_ORIGINS`, `TURSO_*`, …) are forwarded by the compose file; empty means "use the app default". `/docs` and `/openapi.json` are off in production unless `ENABLE_DOCS=true`.
 
 ---
 
-## 3. Persistent Storage & SQLite Backup Procedures
+## 3. Persistent Storage & SQLite Backup
 
-The SQLite database (`dev.db`) is stored inside the named Docker volume `sqlite_data` mounted at `/app`.
+The production database is `/app/data/prod.db`, stored in the named volume `sqlite_data` mounted at `/app/data` (Compose prefixes the project name: see `docker volume ls`).
 
-### Performing a Hot Safe Backup
-To back up the SQLite database without stopping the container:
+The runtime image has **no `sqlite3` binary**, so back up the volume with a throwaway container (uses SQLite's online `.backup`, safe while the API runs):
 ```bash
-docker compose exec api npx sqlite3 dev.db ".backup '/app/backup-$(date +%Y%m%d%H%M%S).db'"
+mkdir -p backups
+docker run --rm -v <project>_sqlite_data:/data -v "$PWD/backups:/backups" alpine \
+  sh -c 'apk add --no-cache sqlite >/dev/null && sqlite3 /data/prod.db ".backup /backups/prod-$(date +%Y%m%d%H%M%S).db"'
 ```
 
-### Copying Backup to Host Machine
-```bash
-docker compose cp api:/app/backup-<TIMESTAMP>.db ./backups/
-```
+To restore, stop the API, copy the backup over `prod.db` in the volume, and start it again.
 
 ---
 
-## 4. Production Security Hardening Checklist for Docker
+## 4. Production Security Hardening Checklist
 - [ ] Container runs as non-root user (`node`).
-- [ ] No secrets or `.env` files are baked into Docker image layers.
-- [ ] `healthcheck` instruction is configured in `docker-compose.yml` pinging `/healthz`.
-- [ ] Memory and CPU limits are specified in orchestrators (Kubernetes / Docker Swarm).
+- [ ] No secrets or `.env` files are baked into image layers (`.dockerignore` excludes `.env`).
+- [ ] Production secrets live in an untracked env file or the orchestrator's secret store, not in `docker-compose.yml`.
+- [ ] `HEALTHCHECK` is defined in the `Dockerfile` (pings `/healthz`).
+- [ ] `TRUST_PROXY=true` **only** behind a trusted reverse proxy; `CORS_ORIGINS` restricted to your frontends.
+- [ ] Memory and CPU limits are specified in your orchestrator (Kubernetes / Docker Swarm).
+- [ ] Backups of the `sqlite_data` volume are scheduled and restore-tested.
