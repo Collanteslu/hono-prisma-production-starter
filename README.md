@@ -200,6 +200,26 @@ sequenceDiagram
 
 ---
 
+## ⚡ Type-Safe RPC Client (`hc`)
+
+The starter exports `AppType` from `src/index.ts`. Any TypeScript frontend (Next.js, Vite, React, Astro, mobile) can consume this API with **end-to-end static type safety** without manual type generation or Swagger codegen:
+
+```ts
+import { hc } from "hono/client";
+import type { AppType } from "./src/index.js";
+
+const client = hc<AppType>("http://localhost:3011");
+
+// Fully typed autocompletion for routes, query params, request body, and responses!
+const res = await client.api.tasks.$get({
+  query: { limit: "10", completed: "false" }
+});
+const data = await res.json();
+console.log(data.data[0].title);
+```
+
+---
+
 ## 📡 Endpoints Reference
 
 ### Health & Observability

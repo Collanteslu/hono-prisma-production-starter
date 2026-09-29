@@ -8,6 +8,7 @@
 import { serve } from "@hono/node-server";
 import { apiReference } from "@scalar/hono-api-reference";
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { prettyJSON } from "hono/pretty-json";
@@ -60,6 +61,22 @@ app.use(
 
 // 5. Formatted readable JSON output
 app.use("*", prettyJSON());
+
+// 6. Payload size limiter: Prevents Memory Exhaustion / DoS attacks (100 KB limit for REST payloads)
+app.use(
+  "*",
+  bodyLimit({
+    maxSize: 100 * 1024,
+    onError: (c) =>
+      c.json(
+        {
+          success: false,
+          message: "Payload Too Large: Request body exceeds the maximum permitted limit of 100 KB.",
+        },
+        413,
+      ),
+  }),
+);
 
 /**
  * -------------------------------------------------------------
@@ -146,17 +163,20 @@ app.get("/", (c) => {
  * Route Module Mounting
  * -------------------------------------------------------------
  */
-// Public authentication routes
-app.route("/api/auth", authRoutes);
+// Public authentication routes and protected resource modules
+const routes = app
+  .route("/api/auth", authRoutes)
+  .use("/api/sessions/*", authMiddleware)
+  .use("/api/users/*", authMiddleware)
+  .use("/api/tasks/*", authMiddleware)
+  .route("/api/sessions", sessionRoutes)
+  .route("/api/users", userRoutes)
+  .route("/api/tasks", taskRoutes);
 
-// Protected routes guarded by JWT and stateful session middleware
-app.use("/api/sessions/*", authMiddleware);
-app.use("/api/users/*", authMiddleware);
-app.use("/api/tasks/*", authMiddleware);
-
-app.route("/api/sessions", sessionRoutes);
-app.route("/api/users", userRoutes);
-app.route("/api/tasks", taskRoutes);
+/**
+ * Export Type-Safe RPC Application Type for client consumption (hc<AppType>)
+ */
+export type AppType = typeof routes;
 
 /**
  * -------------------------------------------------------------

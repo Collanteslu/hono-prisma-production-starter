@@ -19,4 +19,18 @@ describe("Health & Diagnostics API", () => {
     const html = await res.text();
     expect(html).toContain("Scalar");
   });
+
+  it("POST /api/auth/login with excessive payload (>100KB) should return 413 Payload Too Large", async () => {
+    const largeString = "a".repeat(105 * 1024);
+    const res = await app.request("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "admin@example.com", password: largeString }),
+    });
+
+    expect(res.status).toBe(413);
+    const data = await res.json();
+    expect(data.success).toBe(false);
+    expect(data.message).toContain("Payload Too Large");
+  });
 });
