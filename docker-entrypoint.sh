@@ -11,7 +11,8 @@ fi
 
 # Inicializar o sincronizar el esquema de la base de datos
 echo "🚀 Sincronizando esquema de base de datos..."
-npx prisma db push --skip-generate
+npx prisma db push
+
 
 # Ejecutar el proceso principal
 echo "⚡ Iniciando servidor Hono..."

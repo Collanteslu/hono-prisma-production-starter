@@ -4,6 +4,7 @@
  * (e.g. login, token refresh) against brute-force and Denial-of-Service attacks.
  */
 
+import { getConnInfo } from "@hono/node-server/conninfo";
 import type { Context, Next } from "hono";
 import { env } from "../config/env.js";
 
@@ -21,7 +22,7 @@ export function rateLimiter(windowMs: number = 60_000, maxRequests: number = 10)
   const ipStore = new Map<string, RateLimitRecord>();
 
   // Periodically clean up expired IP records to prevent memory leak
-  setInterval(() => {
+  const interval = setInterval(() => {
     const now = Date.now();
     for (const [ip, record] of ipStore.entries()) {
       if (now > record.resetAt) {
@@ -29,23 +30,31 @@ export function rateLimiter(windowMs: number = 60_000, maxRequests: number = 10)
       }
     }
   }, windowMs);
+  interval.unref?.();
 
   return async (c: Context, next: Next) => {
     // Extract client IP address securely:
-    // Only trust reverse-proxy headers (X-Forwarded-For / X-Real-IP) if TRUST_PROXY is explicitly enabled.
-    // Otherwise fallback to Cloudflare cf-connecting-ip or standard localhost.
-    let ip = "localhost";
+    // Only trust reverse-proxy headers (CF-Connecting-IP / X-Forwarded-For / X-Real-IP) if TRUST_PROXY is explicitly enabled.
+    // When TRUST_PROXY is false, reverse-proxy headers are strictly ignored to prevent spoofing bypass attacks.
+    let ip: string | undefined;
 
     if (env.TRUST_PROXY) {
       ip =
-        c.req.header("cf-connecting-ip") ||
+        c.req.header("cf-connecting-ip")?.trim() ||
         c.req.header("x-forwarded-for")?.split(",")[0].trim() ||
-        c.req.header("x-real-ip") ||
-        "localhost";
-    } else {
-      // In untrusted proxy environments, prioritize cloudflare edge header if available, or direct connection
-      ip = c.req.header("cf-connecting-ip") || "localhost";
+        c.req.header("x-real-ip")?.trim();
     }
+
+    if (!ip) {
+      try {
+        const conn = getConnInfo(c);
+        ip = conn?.remote?.address;
+      } catch {
+        // Fallback for mocked or non-socket environments (e.g., unit tests)
+      }
+    }
+
+    ip = ip || "127.0.0.1";
 
     const now = Date.now();
     const clientRecord = ipStore.get(ip);

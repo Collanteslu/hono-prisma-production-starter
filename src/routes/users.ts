@@ -178,6 +178,19 @@ userRoutes.get(
  */
 userRoutes.get("/:id", async (c) => {
   const id = c.req.param("id");
+  const currentUser = c.get("user");
+
+  // Authorization check: Only administrators or the user themselves can inspect the profile
+  if (currentUser.role !== "admin" && currentUser.userId !== id) {
+    return c.json(
+      {
+        success: false,
+        message: "Forbidden: You do not have permission to view this user profile.",
+      },
+      403,
+    );
+  }
+
   const include = parseIncludes(c.req.query("include"), {
     tasks: true,
     sessions: true,
