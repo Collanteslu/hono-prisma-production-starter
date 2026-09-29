@@ -14,8 +14,6 @@ import { sessionIdParamSchema } from "../schemas/index.js";
 import { sessionListResponseSchema, successSchema } from "../schemas/responses.js";
 import { revokeSession, revokeUserSessions } from "../services/sessions.js";
 
-export const sessionRoutes = createRouter();
-
 const emptySuccess = successSchema(z.null());
 
 const listRoute = createRoute({
@@ -29,33 +27,6 @@ const listRoute = createRoute({
     200: jsonResponse(sessionListResponseSchema, "Sesiones del usuario"),
     ...errorResponses({ 401: "Token ausente, inválido o sesión revocada" }),
   },
-});
-
-/**
- * GET /api/sessions/me
- * Retrieves all sessions belonging to the currently authenticated user.
- */
-sessionRoutes.openapi(listRoute, async (c) => {
-  const currentUser = c.get("user");
-
-  const sessions = await prisma.session.findMany({
-    where: { userId: currentUser.userId },
-    orderBy: { createdAt: "desc" },
-  });
-
-  return c.json(
-    {
-      success: true as const,
-      count: sessions.length,
-      currentSessionId: currentUser.sessionId,
-      data: sessions.map((s) => ({
-        ...s,
-        isCurrent: s.id === currentUser.sessionId,
-      })),
-      meta: buildMeta(c),
-    },
-    200,
-  );
 });
 
 const revokeOneRoute = createRoute({
@@ -77,46 +48,6 @@ const revokeOneRoute = createRoute({
   },
 });
 
-/**
- * DELETE /api/sessions/:sessionId
- * Terminates a specific session. Tokens tied to this session will be rejected immediately.
- */
-sessionRoutes.openapi(revokeOneRoute, async (c) => {
-  const { sessionId } = c.req.valid("param");
-  const currentUser = c.get("user");
-
-  const session = await prisma.session.findUnique({
-    where: { id: sessionId },
-  });
-
-  if (!session) {
-    return errorResponse(c, `Session with ID '${sessionId}' not found.`, 404);
-  }
-
-  // Ownership verification: Users can only revoke their own sessions (admins can revoke any)
-  if (session.userId !== currentUser.userId && currentUser.role !== "admin") {
-    return errorResponse(
-      c,
-      "Access denied: You cannot terminate sessions belonging to other users.",
-      403,
-    );
-  }
-
-  await revokeSession(sessionId);
-
-  await recordAudit(c, {
-    userId: currentUser.userId,
-    action: "REVOKE_SESSION",
-    entity: "Session",
-    entityId: sessionId,
-    details: { ownerId: session.userId },
-  });
-
-  return successResponse(c, null, {
-    message: `Session '${sessionId}' has been revoked successfully.`,
-  });
-});
-
 const revokeAllRoute = createRoute({
   method: "post",
   path: "/revoke-all",
@@ -130,24 +61,90 @@ const revokeAllRoute = createRoute({
   },
 });
 
-/**
- * POST /api/sessions/revoke-all
- * Invalidates all active sessions for the current user across all devices.
- */
-sessionRoutes.openapi(revokeAllRoute, async (c) => {
-  const currentUser = c.get("user");
+export const sessionRoutes = createRouter()
+  /**
+   * GET /api/sessions/me
+   * Retrieves all sessions belonging to the currently authenticated user.
+   */
+  .openapi(listRoute, async (c) => {
+    const currentUser = c.get("user");
 
-  const revokedCount = await revokeUserSessions(currentUser.userId);
+    const sessions = await prisma.session.findMany({
+      where: { userId: currentUser.userId },
+      orderBy: { createdAt: "desc" },
+    });
 
-  await recordAudit(c, {
-    userId: currentUser.userId,
-    action: "REVOKE_ALL_SESSIONS",
-    entity: "User",
-    entityId: currentUser.userId,
-    details: { revokedCount },
+    return c.json(
+      {
+        success: true as const,
+        count: sessions.length,
+        currentSessionId: currentUser.sessionId,
+        data: sessions.map((s) => ({
+          ...s,
+          isCurrent: s.id === currentUser.sessionId,
+        })),
+        meta: buildMeta(c),
+      },
+      200,
+    );
+  })
+  /**
+   * DELETE /api/sessions/:sessionId
+   * Terminates a specific session. Tokens tied to this session will be rejected immediately.
+   */
+  .openapi(revokeOneRoute, async (c) => {
+    const { sessionId } = c.req.valid("param");
+    const currentUser = c.get("user");
+
+    const session = await prisma.session.findUnique({
+      where: { id: sessionId },
+    });
+
+    if (!session) {
+      return errorResponse(c, `Session with ID '${sessionId}' not found.`, 404);
+    }
+
+    // Ownership verification: Users can only revoke their own sessions (admins can revoke any)
+    if (session.userId !== currentUser.userId && currentUser.role !== "admin") {
+      return errorResponse(
+        c,
+        "Access denied: You cannot terminate sessions belonging to other users.",
+        403,
+      );
+    }
+
+    await revokeSession(sessionId);
+
+    await recordAudit(c, {
+      userId: currentUser.userId,
+      action: "REVOKE_SESSION",
+      entity: "Session",
+      entityId: sessionId,
+      details: { ownerId: session.userId },
+    });
+
+    return successResponse(c, null, {
+      message: `Session '${sessionId}' has been revoked successfully.`,
+    });
+  })
+  /**
+   * POST /api/sessions/revoke-all
+   * Invalidates all active sessions for the current user across all devices.
+   */
+  .openapi(revokeAllRoute, async (c) => {
+    const currentUser = c.get("user");
+
+    const revokedCount = await revokeUserSessions(currentUser.userId);
+
+    await recordAudit(c, {
+      userId: currentUser.userId,
+      action: "REVOKE_ALL_SESSIONS",
+      entity: "User",
+      entityId: currentUser.userId,
+      details: { revokedCount },
+    });
+
+    return successResponse(c, null, {
+      message: "All active sessions have been revoked. You must log in again.",
+    });
   });
-
-  return successResponse(c, null, {
-    message: "All active sessions have been revoked. You must log in again.",
-  });
-});

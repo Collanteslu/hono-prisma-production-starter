@@ -13,7 +13,7 @@ import { requireAdmin } from "../middleware/auth.js";
 import { auditQuerySchema } from "../schemas/index.js";
 import { auditLogSchema, successSchema } from "../schemas/responses.js";
 
-export const auditRoutes = createRouter();
+const router = createRouter();
 
 const listRoute = createRoute({
   method: "get",
@@ -35,36 +35,37 @@ const listRoute = createRoute({
   },
 });
 
-/**
- * GET /api/audit-logs
- * Retrieves security and action audit logs (Admin only).
- */
-auditRoutes.openapi(listRoute, async (c) => {
-  const query = c.req.valid("query");
-  const { page, limit } = query;
-  const skip = (page - 1) * limit;
+export const auditRoutes = router
+  /**
+   * GET /api/audit-logs
+   * Retrieves security and action audit logs (Admin only).
+   */
+  .openapi(listRoute, async (c) => {
+    const query = c.req.valid("query");
+    const { page, limit } = query;
+    const skip = (page - 1) * limit;
 
-  const where: AuditLogWhereInput = {};
-  if (query.entity) where.entity = query.entity;
-  if (query.action) where.action = query.action;
-  if (query.userId) where.userId = query.userId;
+    const where: AuditLogWhereInput = {};
+    if (query.entity) where.entity = query.entity;
+    if (query.action) where.action = query.action;
+    if (query.userId) where.userId = query.userId;
 
-  const [total, logs] = await Promise.all([
-    prisma.auditLog.count({ where }),
-    prisma.auditLog.findMany({
-      where,
-      skip,
-      take: limit,
-      orderBy: { createdAt: "desc" },
-      include: {
-        user: { select: { id: true, name: true, email: true, role: true } },
-      },
-    }),
-  ]);
+    const [total, logs] = await Promise.all([
+      prisma.auditLog.count({ where }),
+      prisma.auditLog.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { createdAt: "desc" },
+        include: {
+          user: { select: { id: true, name: true, email: true, role: true } },
+        },
+      }),
+    ]);
 
-  return successResponse(
-    c,
-    logs.map((l) => ({ ...l, details: parseAuditDetails(l.details) })),
-    { pagination: buildPagination(total, page, limit) },
-  );
-});
+    return successResponse(
+      c,
+      logs.map((l) => ({ ...l, details: parseAuditDetails(l.details) })),
+      { pagination: buildPagination(total, page, limit) },
+    );
+  });
