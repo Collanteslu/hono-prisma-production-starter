@@ -16,5 +16,9 @@ params:query {
   order: desc
   ~search: interfaz
   ~completed: false
+  ~includeDeleted: true
+  ~sort: -createdAt,title
+  ~filter[completed]: true
   ~include: user
 }
+

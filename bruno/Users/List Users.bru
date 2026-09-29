@@ -16,5 +16,9 @@ params:query {
   order: desc
   ~search: ana
   ~role: user
+  ~includeDeleted: true
+  ~sort: -createdAt,name
+  ~filter[role]: user
   ~include: tasks,sessions
 }
+

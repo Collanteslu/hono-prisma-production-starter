@@ -297,22 +297,28 @@ Following API conventions (JSON:API, RFC 7807), responses include telemetry meta
 
 | Method | Endpoint | Description | Auth |
 |---|---|---|---|
-| `GET` | `/api/tasks` | Paginated list (`?page=1&limit=10&search=text&completed=true&include=user`) | Bearer |
+| `GET` | `/api/tasks` | Paginated list (`?page=1&limit=10&search=text&completed=true&include=user&includeDeleted=true&sort=-createdAt,title&filter[completed]=true`) | Bearer |
 | `GET` | `/api/tasks/:id` | Get single task (`?include=user`, 403 if belonging to another user) | Bearer |
-| `POST` | `/api/tasks` | Create task (automatically assigned to token's userId) | Bearer |
-| `PUT` | `/api/tasks/:id` | Update title, description, or completed state | Bearer |
-| `DELETE` | `/api/tasks/:id` | Delete task | Bearer |
+| `POST` | `/api/tasks` | Create task (automatically assigned to token's userId, generates AuditLog) | Bearer |
+| `PUT` | `/api/tasks/:id` | Update title, description, or completed state (generates AuditLog) | Bearer |
+| `DELETE` | `/api/tasks/:id` | **Soft-delete** task (`deletedAt: now()`). Add `?permanent=true` for physical delete | Bearer |
 
 ### Users (`/api/users`)
 | Method | Endpoint | Description | Auth |
 |---|---|---|---|
-| `GET` | `/api/users` | Paginated users list (`?page=1&limit=10&search=ana&role=user&include=tasks,sessions`) | Bearer |
+| `GET` | `/api/users` | Paginated users list (`?page=1&limit=10&search=ana&role=user&include=tasks,sessions&includeDeleted=true&sort=-createdAt,name&filter[role]=user`) | Bearer |
 | `GET` | `/api/users/:id` | Get user details (`?include=tasks,sessions`) | Bearer |
 | `POST` | `/api/users` | Create user with bcrypt-hashed credentials | Bearer |
 | `PUT` | `/api/users/:id` | Update user profile | Bearer |
 | `PATCH` | `/api/users/:id/block` | **Suspend / Reactivate User** *(Admin only)*: Immediately revokes all active sessions | Bearer |
 | `POST` | `/api/users/:id/revoke-sessions` | Terminate all active sessions for a target user | Bearer |
-| `DELETE` | `/api/users/:id` | Delete user (cascades tasks, sessions, and tokens) | Bearer |
+| `DELETE` | `/api/users/:id` | **Soft-delete** user and revoke all sessions. Add `?permanent=true` for physical cascade delete | Bearer |
+
+### Audit & Security Logs (`/api/audit-logs`)
+| Method | Endpoint | Description | Auth |
+|---|---|---|---|
+| `GET` | `/api/audit-logs` | Query audit trail (`?page=1&limit=20&entity=Task&action=SOFT_DELETE`) | Admin |
+
 
 ---
 
