@@ -7,3 +7,4 @@ dev.db*
 .DS_Store
 bruno/
 test-api.sh
+.env.*

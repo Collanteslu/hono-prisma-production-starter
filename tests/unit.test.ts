@@ -68,8 +68,13 @@ describe("rateLimiter", () => {
     app.use("*", rateLimiter(60_000, 2));
     app.get("/", (c) => c.text("ok"));
 
-    expect((await app.request("/")).status).toBe(200);
-    expect((await app.request("/")).status).toBe(200);
+    const first = await app.request("/");
+    expect(first.status).toBe(200);
+    expect(first.headers.get("X-RateLimit-Limit")).toBe("2");
+    expect(first.headers.get("X-RateLimit-Remaining")).toBe("1");
+    const second = await app.request("/");
+    expect(second.status).toBe(200);
+    expect(second.headers.get("X-RateLimit-Remaining")).toBe("0");
     const limited = await app.request("/");
     expect(limited.status).toBe(429);
     expect(limited.headers.get("Retry-After")).toBeTruthy();

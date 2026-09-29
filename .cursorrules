@@ -1,26 +1,39 @@
 # Hono + Prisma Enterprise Rules & Guidelines
 
-You are an expert engineer working on this production REST API built with Hono v4, Prisma 7 (@prisma/adapter-libsql), SQLite/Turso, Zod, and Biome.
+You are an expert engineer working on this production REST API built with Hono v4, Prisma 7 (@prisma/adapter-libsql), SQLite/Turso, Zod 4, @hono/zod-openapi and Biome.
 
 ## Core Rules & Architecture
-1. **Response Envelope**:
-   - Always return responses using the standardized envelope `successResponse(c, data, { status, message, pagination })` from `src/lib/response.ts`.
-   - Never return raw objects without `success: true` or timing metadata.
+1. **Declare routes once with `createRoute`** (`@hono/zod-openapi`):
+   - Request validation, handler types and the OpenAPI spec all come from the same `createRoute({ request, responses })`. Never write OpenAPI by hand.
+   - Import `z` from `@hono/zod-openapi` in `src/schemas/`; request schemas in `schemas/index.ts`, response schemas in `schemas/responses.ts`.
+   - Use `createRouter()` from `src/lib/openapi.ts` (its default hook returns the standard 400 envelope) and helpers `jsonBody`, `jsonResponse`, `errorResponses`, `secured`.
+   - Declare every status code the handler can return; the compiler rejects undeclared ones.
 
-2. **Relational Expansion**:
-   - For all `findMany` and `findUnique` operations that accept relationships, use `parseIncludes(c.req.query("include"), allowedMap)` from `src/lib/relations.ts`.
-   - Always sanitize sensitive fields (e.g. `password`) from returned relations.
+2. **Chain the routers**:
+   - Export each router as ONE chained expression (`router.openapi(a, ...).openapi(b, ...)`) and mount with a chained `app.route(...)` in `src/index.ts`, keeping `export type AppType = typeof routes;`. Standalone `router.openapi(...)` statements silently break the typed `hc<AppType>` client (`tests/rpc.test.ts` / `npm run typecheck` catch it).
 
-3. **Dynamic Filters & Sorting**:
-   - Use `parseFilters(c.req.query(), { allowedFields: [...] })` and `parseSorting(sort, { allowedFields: [...] })` from `src/lib/query.ts`.
-   - Respect soft deletion (`deletedAt: null`) by default unless `includeDeleted === "true"`.
+3. **Response Envelope**:
+   - Success: `successResponse(c, data, { status, message, pagination })`; errors: `errorResponse(c, message, status)` (both in `src/lib/response.ts`). Use `buildPagination()` for lists.
+   - Never return raw objects without `success` and `meta` (auth token endpoints keep their documented top-level shape).
 
-4. **Security & Ownership**:
-   - For user-scoped resources (e.g., tasks), always enforce ownership checks: `resource.userId === currentUser.userId`.
-   - Record significant audit events (create, update, delete, block) using `recordAudit(c, { ... })` from `src/lib/audit.ts`.
+4. **Relational Expansion**:
+   - Use `parseIncludes(c.req.query("include"), allowedMap)` from `src/lib/relations.ts` with an explicit whitelist.
+   - `User.password` is omitted by the Prisma client globally (`src/db.ts`); never opt back in except for login.
 
-5. **Type Safety & RPC**:
-   - Always chain route definitions in `src/index.ts` and maintain `export type AppType = typeof routes;` for `@hono/rpc` type generation.
+5. **Dynamic Filters & Sorting**:
+   - `parseFilters(c.req.query(), { allowedFields: { title: "string", completed: "boolean", createdAt: "date" } })` — fields are **typed records**, not arrays; invalid values throw HTTP 400. `parseSorting(sort, { allowedFields: [...] })` returns a Prisma `orderBy` array (`src/lib/query.ts`).
+   - Apply ownership fields AFTER user filters so they cannot be overridden. Respect soft deletion (`deletedAt: null`) unless `includeDeleted === "true"`.
 
-6. **Tooling & Formatting**:
-   - Run Biome (`npx @biomejs/biome check --write .`) and ensure `npm run build && npm test` passes with 100% green before opening PRs.
+6. **Security & Ownership**:
+   - Enforce ownership (`resource.userId === c.get("user").userId`) and use `middleware: [requireAdmin] as const` for admin routes. The role comes from the database, not the JWT.
+   - Get the client IP only via `getClientIp(c)`; never read `X-Forwarded-For` directly.
+   - Wrap multi-step writes (block/delete + session revocation, token rotation) in `prisma.$transaction`.
+   - Record significant events with `recordAudit(c, { ... })` from `src/lib/audit.ts`.
+   - Never commit secrets, `.env` files or Bruno tokens.
+
+7. **Database Changes**:
+   - Edit `prisma/schema.prisma`, run `npm run db:migrate -- --name <change>` and then `npm run db:generate` (Prisma 7 does not regenerate the client). Commit the migration. Never use `prisma db push` on real data.
+
+8. **Tooling & Formatting**:
+   - Before opening PRs run `npx @biomejs/biome check --write . && npm run typecheck && npm test` (all green). Tests use an isolated temporary SQLite database.
+   - New or changed endpoints also need a request in `bruno/` (see `.agents/skills/bruno-testing`).

@@ -39,10 +39,12 @@ Use this skill when modifying database models, relations, adding indexes, or tro
    ```
 
 ### 2. Creating a Migration for Schema Changes
-Create a versioned migration (committed under `prisma/migrations`) and regenerate the client:
+Create a versioned migration (committed under `prisma/migrations`), then regenerate the client. **Prisma 7 no longer regenerates the client (or runs seeds) as part of `migrate dev`**, so the second command is required or your types will be stale:
 ```bash
 npx prisma migrate dev --name describe_your_change
+npx prisma generate
 ```
+CI fails if `prisma/migrations` and `schema.prisma` disagree (`prisma migrate diff --exit-code`), so never edit an applied migration and never forget to commit the new one.
 Never use `prisma db push` against real data: production applies migrations with `npx prisma migrate deploy` (done automatically by `docker-entrypoint.sh`).
 
 ### 3. Visual Data Inspection (Prisma Studio)
@@ -56,5 +58,6 @@ Opens the GUI at `http://localhost:5555`.
 If you need to reset the local database from scratch:
 ```bash
 npx prisma migrate reset
-# Restarting the app will trigger seedDatabase() automatically
+npx prisma generate
+# Restarting the app will trigger seedDatabase() automatically (outside production)
 ```

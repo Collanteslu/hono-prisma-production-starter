@@ -43,16 +43,16 @@ export function buildPagination(total: number, page: number, limit: number): Pag
 /**
  * Helper to return a standardized success JSON response with data and telemetry metadata.
  */
-export function successResponse<T>(
+export function successResponse<T, S extends 200 | 201 = 200>(
   c: Context<AppEnv>,
   data: T,
   options?: {
     message?: string;
     pagination?: PaginationMeta;
-    status?: 200 | 201;
+    status?: S;
   },
 ) {
-  const status = options?.status || 200;
+  const status = (options?.status ?? 200) as S;
   return c.json(
     {
       success: true as const,

@@ -33,4 +33,14 @@ describe("Health & Diagnostics API", () => {
     expect(data.success).toBe(false);
     expect(data.message).toContain("Payload Too Large");
   });
+
+  it("responses include HTTP security headers and tracing/timing headers", async () => {
+    const res = await app.request("/healthz");
+    expect(res.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(res.headers.get("X-Frame-Options")).toBeTruthy();
+    expect(res.headers.get("Strict-Transport-Security")).toBeTruthy();
+    expect(res.headers.get("X-Request-Id")).toBeTruthy();
+    expect(res.headers.get("X-Response-Time")).toMatch(/ms$/);
+    expect(res.headers.get("Server-Timing")).toMatch(/^total;dur=/);
+  });
 });

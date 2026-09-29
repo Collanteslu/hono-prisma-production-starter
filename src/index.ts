@@ -6,8 +6,8 @@
  */
 
 import { serve } from "@hono/node-server";
+import { createRoute } from "@hono/zod-openapi";
 import { apiReference } from "@scalar/hono-api-reference";
-import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
 import { HTTPException } from "hono/http-exception";
@@ -18,10 +18,10 @@ import { secureHeaders } from "hono/secure-headers";
 // Environment configuration and database client
 import { env } from "./config/env.js";
 import { prisma, seedDatabase } from "./db.js";
-import { openApiSpec } from "./docs/openapi.js";
 import { Prisma } from "./generated/client/client.js";
 import { startCleanupJob } from "./jobs/cleanup.js";
 import { logger as appLogger } from "./lib/logger.js";
+import { createRouter, jsonResponse } from "./lib/openapi.js";
 import { errorResponse } from "./lib/response.js";
 import { API_VERSION } from "./lib/version.js";
 // Middlewares
@@ -33,12 +33,20 @@ import { authRoutes } from "./routes/auth.js";
 import { sessionRoutes } from "./routes/sessions.js";
 import { taskRoutes } from "./routes/tasks.js";
 import { userRoutes } from "./routes/users.js";
-import type { AppEnv } from "./types/index.js";
+import { healthResponseSchema } from "./schemas/responses.js";
 
 /**
  * Initialize main Hono application instance bound with AppEnv types
  */
-const app = new Hono<AppEnv>();
+const app = createRouter();
+
+// Bearer JWT scheme referenced by every protected route (`security: [{ BearerAuth: [] }]`)
+app.openAPIRegistry.registerComponent("securitySchemes", "BearerAuth", {
+  type: "http",
+  scheme: "bearer",
+  bearerFormat: "JWT",
+  description: "Access Token JWT obtenido en POST /api/auth/login",
+});
 
 /**
  * -------------------------------------------------------------
@@ -93,8 +101,25 @@ app.use(
  */
 // Documentation is enabled by default outside production (override with ENABLE_DOCS)
 if (env.ENABLE_DOCS ?? env.NODE_ENV !== "production") {
-  // Raw OpenAPI 3.0 specification endpoint
-  app.get("/openapi.json", (c) => c.json(openApiSpec));
+  // OpenAPI 3.0 specification generated from the route definitions and Zod schemas
+  app.doc("/openapi.json", {
+    openapi: "3.0.3",
+    info: {
+      title: "Hono REST API - Gestión de Usuarios y Tareas",
+      version: API_VERSION,
+      description:
+        "API REST con Hono, Prisma 7 (SQLite), TypeScript, Zod, autenticación JWT con refresh tokens rotativos, sesiones con estado y rate limiting.",
+    },
+    servers: [{ url: `http://localhost:${env.PORT}`, description: "Servidor local" }],
+    tags: [
+      { name: "Auth" },
+      { name: "Sessions" },
+      { name: "Users" },
+      { name: "Tasks" },
+      { name: "Audit" },
+      { name: "System" },
+    ],
+  });
 
   // Interactive web console at /docs powered by Scalar
   app.get(
@@ -109,30 +134,45 @@ if (env.ENABLE_DOCS ?? env.NODE_ENV !== "production") {
 }
 
 // Deep Healthcheck endpoint verifying process uptime and SQLite latency
-app.get("/healthz", async (c) => {
+const healthRoute = createRoute({
+  method: "get",
+  path: "/healthz",
+  tags: ["System"],
+  summary: "Healthcheck",
+  description: "Estado del proceso y latencia de la consulta a SQLite.",
+  responses: {
+    200: jsonResponse(healthResponseSchema, "Servicio saludable"),
+    503: jsonResponse(healthResponseSchema, "Base de datos no disponible"),
+  },
+});
+
+app.openapi(healthRoute, async (c) => {
   try {
     const startTime = Date.now();
     await prisma.$queryRaw`SELECT 1`;
     const dbLatencyMs = Date.now() - startTime;
 
-    return c.json({
-      status: "healthy",
-      timestamp: new Date().toISOString(),
-      uptimeSeconds: Math.floor(process.uptime()),
-      database: {
-        status: "connected",
-        latencyMs: dbLatencyMs,
+    return c.json(
+      {
+        status: "healthy" as const,
+        timestamp: new Date().toISOString(),
+        uptimeSeconds: Math.floor(process.uptime()),
+        database: {
+          status: "connected" as const,
+          latencyMs: dbLatencyMs,
+        },
       },
-    });
+      200,
+    );
   } catch (error) {
     // Details are logged server-side only; the public endpoint must not leak internals
     appLogger.error({ err: error }, "Healthcheck database probe failed");
     return c.json(
       {
-        status: "unhealthy",
+        status: "unhealthy" as const,
         timestamp: new Date().toISOString(),
         database: {
-          status: "disconnected",
+          status: "disconnected" as const,
         },
       },
       503,

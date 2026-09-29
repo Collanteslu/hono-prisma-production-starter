@@ -23,11 +23,15 @@ body:json {
 
 script:post-response {
   if (res.status === 200 && res.body.accessToken) {
-    bru.setEnvVar("token", res.body.accessToken);
-    bru.setEnvVar("refreshToken", res.body.refreshToken);
+    bru.setVar("token", res.body.accessToken);
+    bru.setVar("refreshToken", res.body.refreshToken);
     if (res.body.sessionId) {
-      bru.setEnvVar("sessionId", res.body.sessionId);
+      bru.setVar("sessionId", res.body.sessionId);
     }
   }
 }
 
+docs {
+  Inicia sesión como usuario estándar (Ana, usuario demo del seeder, solo en desarrollo).
+  Límite: 10 intentos/min por IP y bloqueo de la cuenta tras 5 contraseñas incorrectas (15 min).
+}

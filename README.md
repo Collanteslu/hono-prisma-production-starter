@@ -7,7 +7,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-Strict-blue.svg)](https://www.typescriptlang.org/)
 [![OpenAPI / Scalar](https://img.shields.io/badge/Docs-Scalar%20OpenAPI-6366f1.svg)](https://scalar.com/)
 
-> **A production-ready, batteries-included REST API GitHub template** built with **TypeScript**, **[Hono](https://hono.dev/)**, **[Prisma 7](https://www.prisma.io/)** (embedded SQLite via LibSQL Driver Adapter), **[Zod](https://zod.dev/)**, **Bcrypt**, **Stateful Sessions with real-time revocation and user blocking**, **Rate Limiting**, **Graceful Shutdown**, **Docker containerization**, and interactive **[Scalar OpenAPI](https://scalar.com/)** documentation.
+> **A production-ready, batteries-included REST API GitHub template** built with **TypeScript**, **[Hono](https://hono.dev/)**, **[Prisma 7](https://www.prisma.io/)** (embedded SQLite via LibSQL Driver Adapter), **[Zod 4](https://zod.dev/)** (with an OpenAPI spec generated from the routes), **Bcrypt**, **Stateful Sessions with real-time revocation and user blocking**, **Rate Limiting**, **Graceful Shutdown**, **Docker containerization**, and interactive **[Scalar OpenAPI](https://scalar.com/)** documentation.
 
 ---
 
@@ -20,7 +20,8 @@ This template gives you an **opinionated, robust, production-grade foundation**:
 - **Enterprise-Grade Authentication**: Access Tokens (15 min) + Refresh Tokens (7 days) with **Token Rotation** and **Stateful Session tracking** in SQLite.
 - **Instant Revocation & Real-Time Suspension**: Suspend accounts or revoke active sessions immediately; requests are rejected in real-time without waiting for JWT expiration.
 - **Strict User Ownership**: Standard users can only interact with tasks they own.
-- **OpenAPI 3.0 & Swagger/Scalar Included**: Interactive web documentation served out-of-the-box at `/docs`.
+- **OpenAPI 3.0 Generated from Code**: Each route is declared once (validation + types + docs), so the interactive Scalar console at `/docs` can never drift from the implementation.
+- **End-to-End Typed Client**: `hc<AppType>` gives frontends fully typed requests and responses with no codegen.
 - **Git-Integrated API Testing**: Full collection included for **[Bruno API Client](https://www.usebruno.com/)** with automated token propagation.
 
 ---
@@ -32,11 +33,16 @@ This template gives you an **opinionated, robust, production-grade foundation**:
 4. [Interactive API Documentation (Scalar)](#-interactive-api-documentation-scalar)
 5. [Testing with Bruno API Client](#-testing-with-bruno-api-client)
 6. [Stateful Sessions & Security Model](#-stateful-sessions--security-model)
-7. [Endpoints Reference](#-endpoints-reference)
-8. [Automated Test Suite](#-automated-test-suite)
-9. [Docker Deployment](#-docker-deployment)
-10. [Contributing & Development Guidelines](#-contributing--development-guidelines)
-11. [License](#-license)
+7. [Type-Safe RPC Client](#-type-safe-rpc-client-hc)
+8. [Relational Expansion](#-relational-expansion-include)
+9. [Response Envelope & Telemetry](#-standard-response-envelope--telemetry)
+10. [Endpoints Reference](#-endpoints-reference)
+11. [Automated Testing & Code Quality](#-automated-testing--code-quality)
+12. [Configuration](#-configuration)
+13. [Docker Deployment](#-docker-deployment)
+14. [Contributing & Development Guidelines](#-contributing--development-guidelines)
+15. [License](#-license)
+16. [AI Agent Skills & Runbooks](#-ai-agent-skills--runbooks-agentsskills)
 
 ---
 
@@ -44,49 +50,60 @@ This template gives you an **opinionated, robust, production-grade foundation**:
 
 ```text
 hono-prisma-production-starter/
-├── .env                              # Local environment variables
-├── .env.example                      # Production environment template
+├── .env.example                      # Environment template (secrets intentionally blank)
 ├── .github/
-│   ├── workflows/ci.yml              # GitHub Actions CI (Typechecking & Build)
+│   ├── workflows/ci.yml              # CI: audit, migration drift, typecheck, build, lint, tests + coverage
 │   ├── ISSUE_TEMPLATE/               # Bug report & feature request forms
 │   └── PULL_REQUEST_TEMPLATE.md      # Standard PR checklist
+├── .agents/skills/                   # Runbooks for AI assistants and contributors
+├── .husky/pre-commit                 # lint-staged (Biome) on commit
 ├── prisma.config.ts                  # Prisma 7 configuration file
 ├── prisma/
-│   └── schema.prisma                 # Domain models: User, Session, RefreshToken, Task
-├── bruno/                            # Complete collection for Bruno API Client
-│   ├── bruno.json                    # Bruno collection metadata
-│   ├── collection.bru                # Global Authorization Bearer header
-│   ├── environments/Local.bru        # Local environment variables (baseUrl, token)
-│   ├── Auth/                         # Login Admin, Login User, Refresh, Logout
-│   ├── Sessions/                     # List sessions, Revoke session, Revoke all
-│   ├── Users/                        # Paginated user CRUD, Block / Unblock user
-│   └── Tasks/                        # Paginated & filtered task CRUD
+│   ├── schema.prisma                 # Models: User, Session, RefreshToken, Task, AuditLog
+│   └── migrations/                   # Versioned SQL migrations (applied with `migrate deploy`)
+├── bruno/                            # Collection for the Bruno API Client
+│   ├── bruno.json                    # Collection metadata
+│   ├── collection.bru                # Global `Authorization: Bearer {{token}}` header
+│   ├── environments/Local.bru        # Only `baseUrl` (tokens are never stored on disk)
+│   ├── Auth/                         # Register, Login Admin, Login User, Refresh Token, Logout
+│   ├── Sessions/                     # My Sessions, Revoke Session, Revoke All Sessions
+│   ├── Users/                        # List/Get/Create/Update/Delete, Block/Unblock, Revoke User Sessions
+│   ├── Tasks/                        # List/Get/Create/Update/Delete, Restore Task
+│   └── Audit/                        # List Audit Logs
 ├── src/
-│   ├── config/
-│   │   └── env.ts                    # Zod-validated environment variables
-│   ├── db.ts                         # Prisma 7 client & automatic seeder
-│   ├── docs/
-│   │   └── openapi.ts                # Complete OpenAPI 3.0 specification
-│   ├── jobs/
-│   │   └── cleanup.ts                # Background routine purging expired sessions
+│   ├── config/env.ts                 # Zod-validated environment variables (fails fast on bad config)
+│   ├── db.ts                         # Prisma 7 client (password hashes omitted globally) & dev seeder
+│   ├── index.ts                      # Entrypoint: global middleware, OpenAPI docs, error handling, shutdown
+│   ├── jobs/cleanup.ts               # Background purge of expired sessions and rotated tokens
+│   ├── lib/
+│   │   ├── audit.ts                  # recordAudit() helper
+│   │   ├── clientIp.ts               # Client IP resolution (proxy headers only if TRUST_PROXY=true)
+│   │   ├── logger.ts                 # Pino logger
+│   │   ├── openapi.ts                # createRouter(), route helpers (jsonBody, jsonResponse, errorResponses)
+│   │   ├── query.ts                  # Typed filter[...] and sort parsing
+│   │   ├── relations.ts              # ?include= whitelist parser
+│   │   ├── response.ts               # successResponse / errorResponse / pagination helpers
+│   │   ├── validator.ts              # Zod issue formatter for the 400 envelope
+│   │   └── version.ts                # API_VERSION constant
 │   ├── middleware/
-│   │   ├── auth.ts                   # Stateful session & real-time block check
-│   │   ├── rateLimit.ts              # IP-based rate limiter middleware
-│   │   └── requestId.ts              # Tracing header (X-Request-Id)
-│   ├── routes/
-│   │   ├── auth.ts                   # /api/auth routes
-│   │   ├── sessions.ts               # /api/sessions routes
-│   │   ├── users.ts                  # /api/users routes
-│   │   └── tasks.ts                  # /api/tasks routes
+│   │   ├── auth.ts                   # Stateful auth (role/block/session read from DB) + requireAdmin
+│   │   ├── rateLimit.ts              # Per-IP rate limiter and per-account login lockout
+│   │   └── requestId.ts              # X-Request-Id / timing headers
+│   ├── routes/                       # auth, sessions, users, tasks, audit (createRoute + router.openapi)
 │   ├── schemas/
-│   │   └── index.ts                  # Zod schemas for bodies and query parameters
-│   ├── types/
-│   │   └── index.ts                  # TypeScript interfaces and Hono AppEnv
-│   ├── utils/
-│   │   └── password.ts               # Bcrypt password hashing utilities
-│   └── index.ts                      # Main entrypoint, global middlewares & shutdown
-├── test-api.sh                       # End-to-end bash test suite
-├── Dockerfile                        # Multi-stage production container
+│   │   ├── index.ts                  # Zod request schemas (registered as OpenAPI components)
+│   │   └── responses.ts              # Zod response schemas (documented and type-checked)
+│   ├── services/sessions.ts          # Token issuing, atomic refresh rotation, session revocation
+│   ├── types/index.ts                # JWT payload, Hono AppEnv, response metadata types
+│   └── utils/password.ts             # Bcrypt hashing utilities
+├── tests/                            # Vitest suites (isolated temporary SQLite DB per run)
+│   ├── setup/global-setup.ts         # Creates and migrates the temporary database
+│   ├── tsconfig.json                 # Type-checks tests too (`npm run typecheck`)
+│   └── *.test.ts                     # auth, security, users, tasks, unit, health, openapi, rpc
+├── test-api.sh                       # End-to-end bash suite against a running server
+├── biome.json                        # Linter / formatter configuration
+├── Dockerfile                        # Multi-stage production image (non-root, HEALTHCHECK)
+├── docker-entrypoint.sh              # Applies migrations, then starts the server
 ├── docker-compose.yml                # Production Compose configuration
 └── LICENSE                           # MIT License
 ```
@@ -96,7 +113,7 @@ hono-prisma-production-starter/
 ## ⚡ Quickstart in 3 Steps
 
 ### Prerequisites
-- **Node.js** v20.0.0 or higher (Tested on Node v20 & v22 LTS)
+- **Node.js** v20.0.0 or higher (CI runs on Node 20 LTS)
 - **npm** v9 or higher
 
 ```bash
@@ -106,7 +123,9 @@ cd your-repo-name
 
 # 2. Install dependencies & initialize SQLite database (versioned migrations)
 npm install
-cp .env.example .env   # then set strong JWT secrets: openssl rand -base64 48
+cp .env.example .env
+# Generate two distinct signing secrets (the app refuses to start without them)
+sed -i.bak "s|^JWT_SECRET=.*|JWT_SECRET=$(openssl rand -base64 48)|; s|^JWT_REFRESH_SECRET=.*|JWT_REFRESH_SECRET=$(openssl rand -base64 48)|" .env && rm .env.bak
 npx prisma generate
 npx prisma migrate deploy
 
@@ -120,15 +139,17 @@ The API will be running on:
 http://localhost:3011
 ```
 
-*(On first startup, default demo accounts and tasks are automatically seeded into SQLite with bcrypt-hashed passwords).*
+*(Outside production, an empty database is seeded on first startup with demo accounts and tasks — see [Pre-seeded Demo Credentials](#pre-seeded-demo-credentials). In production nothing is seeded; bootstrap the first admin with `ADMIN_EMAIL` / `ADMIN_PASSWORD`.)*
 
 ### Database migrations
 
 Schema changes are tracked in [`prisma/migrations`](prisma/migrations) (never use `db push` against real data):
 
 ```bash
-# After editing prisma/schema.prisma, create and apply a new migration locally
+# After editing prisma/schema.prisma, create and apply a new migration locally...
 npm run db:migrate -- --name describe_your_change
+# ...and regenerate the typed client (Prisma 7 no longer does this automatically)
+npm run db:generate
 
 # Apply pending migrations (CI / production — the Docker entrypoint does this automatically)
 npm run db:deploy
@@ -157,6 +178,8 @@ The API ships with an interactive, modern web console powered by **[Scalar](http
 
 You can explore endpoints, inspect request and response schemas, and execute live HTTP calls with Bearer Token authorization directly from your browser.
 
+**The specification is generated from the code** (`@hono/zod-openapi` + Zod 4): each route is declared once with `createRoute`, and that single definition validates the request, types the handler and documents the endpoint. The compiler rejects handlers returning a status/body that is not declared, and `tests/openapi.test.ts` validates the spec, fails if a registered route is undocumented and checks real responses against the published schemas. See [`.agents/skills/openapi-documentation`](.agents/skills/openapi-documentation/SKILL.md).
+
 ---
 
 ## 🐶 Testing with Bruno API Client
@@ -173,10 +196,22 @@ You can explore endpoints, inspect request and response schemas, and execute liv
 ### How to use the included collection
 1. Open **Bruno**.
 2. Click **Open Collection** and select the [`bruno/`](bruno/) folder in the repository.
-3. Select the **`Local`** environment from the top-right environment picker.
+3. Select the **`Local`** environment from the top-right environment picker (it only defines `baseUrl`, `http://localhost:3011`).
 4. Run `Login Admin` or `Login User` under `Auth/`:
-   - An automated post-response script stores the `token`, `refreshToken`, and `sessionId` into your environment.
-   - All subsequent calls in `Tasks/`, `Users/`, and `Sessions/` automatically send the `Authorization: Bearer {{token}}` header.
+   - A post-response script stores `token`, `refreshToken` and `sessionId` as Bruno **runtime variables**: they live in memory only, are **never written to the repository**, and are lost when Bruno closes (just log in again).
+   - All other requests send `Authorization: Bearer {{token}}` automatically (global header in `collection.bru`).
+
+Some things to know before running requests:
+
+| Request | Needs |
+|---|---|
+| `Users/List Users`, `Create User`, `Block User`, `Unblock User`, `Get User By ID` (uses `user-1`), `Audit/*` | **Login Admin** |
+| `Tasks/Get Task By ID`, `Update Task`, `Delete Task`, `Restore Task` | `task-1` belongs to the admin → **Login Admin** (with Login User use `task-3`) |
+| `Tasks/Restore Task` | Run `Delete Task` first (without `permanent`) |
+| `Sessions/Revoke Session`, `Revoke All Sessions`, `Auth/Logout` | End the current session: log in again afterwards |
+| `Auth/Refresh Token` | Refresh tokens are single-use; run `Login *` again to get a fresh one |
+
+Demo accounts only exist outside production (see [Pre-seeded Demo Credentials](#pre-seeded-demo-credentials)). You can also run the collection headless: `npx @usebruno/cli run --env Local` from the `bruno/` folder (note that `Auth/Logout` invalidates the token used by the requests that follow it, so run folders individually).
 
 ---
 
@@ -213,13 +248,16 @@ sequenceDiagram
 - **Refresh token rotation with reuse detection**: each refresh token can be exchanged exactly once (atomic claim). Replaying a rotated token within `REFRESH_REUSE_GRACE_SECONDS` (default 10s) returns `409` (benign concurrent refresh); after that it is treated as theft and the whole session is revoked.
 - **Hashed refresh tokens**: only SHA-256 digests are persisted, so a database leak does not expose usable tokens.
 - **Real-time authorization**: blocking, soft-deleting, role changes and session revocation take effect on the very next request (role is read from the database, not from the JWT).
-- **Brute-force protection**: per-IP rate limits on `/login`, `/refresh` and `/register`, plus a per-account lockout after 5 failed logins (15 min). Limits are in-memory (per instance).
+- **Brute-force protection**: per-IP rate limits on `/login`, `/refresh` and `/register`, plus a per-account lockout after 5 failed logins (15 min). Limits are in-memory (per instance). Note the lockout is keyed by email, so someone can deliberately lock a known address for 15 minutes; this is the usual trade-off against credential stuffing.
 - **Trusted client IP**: `X-Forwarded-For` / `CF-Connecting-IP` are only honoured when `TRUST_PROXY=true` (sessions, audit log and rate limiting).
 - **Password policy**: 8–72 characters (bcrypt cost 12). Changing a password revokes every other session of the account.
+- **Startup guards**: the app refuses to boot without `JWT_SECRET` / `JWT_REFRESH_SECRET`, and in production requires both to be at least 32 characters and different from each other. `.env.example` ships with blank secrets on purpose.
 - **Admin safety**: the last active administrator cannot delete their account; deleted accounts cannot be reactivated.
 - **Audit trail**: logins (successful and failed), logout, registration, user creation, block/unblock, password changes, session revocations, token reuse and task changes.
 
 ### Pre-seeded Demo Credentials
+
+Created automatically **only when `NODE_ENV` is not `production`** and the database has no users. Never rely on them outside local development.
 
 | Role | Name | Email | Password | Permissions |
 |---|---|---|---|---|
@@ -230,21 +268,31 @@ sequenceDiagram
 
 ## ⚡ Type-Safe RPC Client (`hc`)
 
-The starter exports `AppType` from `src/index.ts`. Any TypeScript frontend (Next.js, Vite, React, Astro, mobile) can consume this API with **end-to-end static type safety** without manual type generation or Swagger codegen:
+The starter exports `AppType` from `src/index.ts`. Any TypeScript frontend (Next.js, Vite, React, Astro, mobile) can consume the `/api/*` routes with **end-to-end static type safety** — request params, query, JSON bodies and per-status response bodies — without manual type generation or Swagger codegen:
 
 ```ts
 import { hc } from "hono/client";
 import type { AppType } from "./src/index.js";
 
-const client = hc<AppType>("http://localhost:3011");
-
-// Fully typed autocompletion for routes, query params, request body, and responses!
-const res = await client.api.tasks.$get({
-  query: { limit: "10", completed: "false" }
+const client = hc<AppType>("http://localhost:3011", {
+  headers: { Authorization: `Bearer ${accessToken}` },
 });
-const data = await res.json();
-console.log(data.data[0].title);
+
+const res = await client.api.tasks.$get({
+  query: { limit: "10", completed: "false" },
+});
+
+// Responses are typed per status code: narrow before reading `data`
+if (res.ok) {
+  const { data, pagination } = await res.json();
+  console.log(data[0].title, pagination?.total);
+}
+
+const created = await client.api.tasks.$post({ json: { title: "Typed task" } });
+if (created.status === 201) console.log((await created.json()).data.id);
 ```
+
+This works because every router in `src/routes/` is exported as one **chained** expression (`createRouter().openapi(...).openapi(...)`), which is what lets TypeScript accumulate the route types. Keep that shape when adding routes. `tests/rpc.test.ts` exercises the client at runtime and `npm run typecheck` fails if `AppType` stops carrying the routes.
 
 ---
 
@@ -261,17 +309,20 @@ Just like in NestJS / Prisma Eager Loading, endpoints support dynamic relational
   GET /api/tasks?include=user
   ```
 
-Supported securely via the reusable whitelist helper `src/lib/relations.ts`. Sensitive fields (such as password hashes) remain automatically sanitized.
+Supported securely via the reusable whitelist helper `src/lib/relations.ts`; only whitelisted relations can be requested. Password hashes are never returned: the Prisma client omits `User.password` from every query unless explicitly requested (`omit: { password: false }`, used only by login).
 
 ---
 
 ## 📦 Standard Response Envelope & Telemetry
 
-Following API conventions (JSON:API, RFC 7807), responses include telemetry metadata (`meta`) and standard HTTP headers (`Server-Timing`, `X-Response-Time`, `X-Request-Id`):
+Following API conventions (JSON:API, RFC 7807), responses include telemetry metadata (`meta`) and standard HTTP headers (`Server-Timing`, `X-Response-Time`, `X-Request-Id`).
+
+**Success** (resources and lists):
 
 ```json
 {
   "success": true,
+  "message": "Task created successfully.",
   "data": [ ... ],
   "pagination": {
     "total": 42,
@@ -290,10 +341,27 @@ Following API conventions (JSON:API, RFC 7807), responses include telemetry meta
 }
 ```
 
+`message` and `pagination` appear only when applicable. **Authentication endpoints** (`/login`, `/refresh`) return their token fields at the top level instead of under `data`:
+
+```json
+{ "success": true, "message": "Authentication successful", "accessToken": "…", "refreshToken": "…",
+  "expiresIn": 900, "sessionId": "…", "user": { "id": "…", "name": "…", "email": "…", "role": "user" }, "meta": { … } }
+```
+
+**Errors** always have `success: false` and a `message`; validation failures (400) add `errors` grouped by field:
+
+```json
+{ "success": false, "message": "Validation error in request payload",
+  "errors": { "email": ["El formato del correo electrónico no es válido"] } }
+```
+
+Most errors also carry `meta`. A few are produced by infrastructure middleware and omit it — request validation (400), rate limiting (429) and the 100 KB body limit (413) — so use the `X-Request-Id` response header to correlate requests. The full contract of every endpoint is in `/openapi.json`.
+
 ### HTTP Response Headers
-- `X-Request-Id`: Unique request trace identifier.
+- `X-Request-Id`: Unique request trace identifier (an incoming `X-Request-Id` is reused only if it matches `[A-Za-z0-9._:-]{1,128}`).
 - `X-Response-Time`: Server-side processing duration (e.g., `4.12ms`).
 - `Server-Timing`: Standard W3C timing header (`total;dur=4.12`) displayed natively in Chrome DevTools Network panel.
+- `X-RateLimit-Limit` / `X-RateLimit-Remaining` (and `Retry-After` on 429): on rate-limited endpoints.
 
 ---
 
@@ -302,7 +370,8 @@ Following API conventions (JSON:API, RFC 7807), responses include telemetry meta
 ### Health & Observability
 | Method | Endpoint | Description | Auth |
 |---|---|---|---|
-| `GET` | `/healthz` | Uptime check & active SQLite query latency in ms | No |
+| `GET` | `/` | Service overview: name, version and endpoint index | No |
+| `GET` | `/healthz` | Uptime check & active SQLite query latency in ms (`503` if the database is unreachable) | No |
 | `GET` | `/docs` | Interactive Scalar OpenAPI web documentation (disabled in production unless `ENABLE_DOCS=true`) | No |
 | `GET` | `/openapi.json` | Raw OpenAPI 3.0 schema (same toggle as `/docs`) | No |
 
@@ -319,7 +388,7 @@ Following API conventions (JSON:API, RFC 7807), responses include telemetry meta
 | Method | Endpoint | Description | Auth |
 |---|---|---|---|
 | `GET` | `/api/sessions/me` | List all active/inactive sessions with IP & User-Agent | Bearer |
-| `DELETE` | `/api/sessions/:sessionId` | **Revoke specific session**: Instantly kicks device | Bearer |
+| `DELETE` | `/api/sessions/:sessionId` | **Revoke specific session**: Instantly kicks device (own sessions; Admin can revoke any) | Bearer |
 | `POST` | `/api/sessions/revoke-all` | **Revoke all sessions**: Closes all active devices | Bearer |
 
 ### Tasks (`/api/tasks`)
@@ -338,7 +407,7 @@ Following API conventions (JSON:API, RFC 7807), responses include telemetry meta
 | Method | Endpoint | Description | Auth |
 |---|---|---|---|
 | `GET` | `/api/users` | Paginated users list (`?page=1&limit=10&search=ana&role=user&include=tasks,sessions&includeDeleted=true&sort=-createdAt,name&filter[role]=user`) | Admin |
-| `GET` | `/api/users/:id` | Get user details (`?include=tasks,sessions`) | Bearer |
+| `GET` | `/api/users/:id` | Get user details (`?include=tasks,sessions`); Admin, or the user themselves | Bearer |
 | `POST` | `/api/users` | Create user with any role (public sign-up lives at `/api/auth/register`) | Admin |
 | `PUT` | `/api/users/:id` | Update own user profile (or any profile if Admin). A password change revokes other sessions | Bearer |
 | `PATCH` | `/api/users/:id/block` | **Suspend / Reactivate User** *(Admin only)*: Immediately revokes all active sessions | Admin |
@@ -351,7 +420,7 @@ Following API conventions (JSON:API, RFC 7807), responses include telemetry meta
 |---|---|---|---|
 | `GET` | `/api/audit-logs` | Query audit trail (`?page=1&limit=20&entity=Task&action=SOFT_DELETE&userId=...`) | Admin |
 
-> **Filters** (`filter[field]` / `filter[field][op]`) are typed per field: booleans accept `eq`, strings `eq|contains|in`, dates `eq|gte|lte`. Invalid operators or values return `400`.
+> **Filters** (`filter[field]` / `filter[field][op]`) are typed per field: booleans accept `eq`, strings `eq|contains|in`, numbers `eq|gte|lte|in`, dates `eq|gte|lte`. Filterable fields — tasks: `title`, `description`, `completed`, `createdAt`; users: `name`, `email`, `role`, `isBlocked`, `createdAt`. Unknown fields are ignored; invalid operators or values return `400`. Pagination `limit` is capped at 100 on every list endpoint (out-of-range values return `400`).
 
 
 ---
@@ -368,6 +437,9 @@ npm test
 # Run tests with V8 coverage report
 npm run test:coverage
 
+# Type-check source and tests (also verifies the typed RPC client)
+npm run typecheck
+
 # Run tests in interactive watch mode
 npm run test:watch
 ```
@@ -379,6 +451,8 @@ Runs end-to-end HTTP tests against an active server instance:
 # Ensure server is running (npm run dev), then execute:
 npm run test:e2e
 ```
+
+The script targets `http://localhost:3011` and relies on the **demo accounts, so it only works outside production**. It changes data (it suspends and reactivates Ana and revokes one of her sessions) and signs in five times, so wait a minute between runs to stay under the login rate limit (10/min per IP).
 
 ### 3. Code Formatting & Linting (Biome)
 Fast Rust-powered linter and formatter:
@@ -406,41 +480,69 @@ npm run lint:fix
 - [x] Typed filters (400 on invalid input), malformed JSON handling, multi-field sorting
 - [x] Admin-only user creation, public registration, last-admin protection, password-change session revocation
 - [x] Soft-deleted task visibility and restore
+- [x] OpenAPI spec validity, no code/spec drift, and response contracts checked against schemas
+- [x] Typed RPC client (`hc<AppType>`) at runtime and at compile time
+- [x] Suspended accounts rejected at login and on existing tokens
+
+---
+
+## ⚙️ Configuration
+
+All settings are environment variables, validated at startup (the process exits with a clear message if something is wrong). Copy [`.env.example`](.env.example) to `.env` for local development.
+
+| Variable | Default | Description |
+|---|---|---|
+| `JWT_SECRET` / `JWT_REFRESH_SECRET` | — (**required**) | HS256 signing secrets, at least 16 characters. **In production: at least 32 characters and different from each other.** Generate with `openssl rand -base64 48` |
+| `NODE_ENV` | `development` | `development`, `production` or `test`. Production disables the demo seeder and, by default, the docs |
+| `PORT` | `3011` | HTTP port |
+| `DATABASE_URL` | `file:./dev.db` | Local SQLite file (relative paths resolve from the working directory) |
+| `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` | — | Use a remote Turso/libSQL database instead of the local file |
+| `TRUST_PROXY` | `false` | Trust `X-Forwarded-For` / `CF-Connecting-IP` for client IPs (enable only behind a trusted reverse proxy) |
+| `CORS_ORIGINS` | `*` | Comma-separated allowed origins |
+| `ENABLE_DOCS` | `true` outside production | Expose `/docs` and `/openapi.json` |
+| `LOGIN_RATE_LIMIT_MAX` / `REFRESH_RATE_LIMIT_MAX` / `REGISTER_RATE_LIMIT_MAX` | `10` / `30` / `5` | Per-IP limits (login and refresh per minute; register per hour) |
+| `REFRESH_REUSE_GRACE_SECONDS` | `10` | Window in which reusing a just-rotated refresh token is treated as a concurrent refresh instead of theft |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | — | Bootstrap the first admin in production on an empty database (password 8–72 chars) |
+| `LOG_LEVEL` | `info` in production, `debug` otherwise | Pino log level (`trace` … `fatal`, `silent`) |
+
+An empty value (`VAR=`) is treated as unset, which is what lets Docker Compose forward optional variables without overriding defaults.
 
 ---
 
 ## 🐳 Docker Deployment
 
-The template includes an optimized multi-stage `Dockerfile` (Alpine-based, non-root user, `HEALTHCHECK` on `/healthz`) and `docker-compose.yml`. Secrets are **never** committed: Compose refuses to start unless `JWT_SECRET` and `JWT_REFRESH_SECRET` are provided via the environment or a local `.env` file:
+The template includes an optimized multi-stage `Dockerfile` (Alpine-based, non-root user, `HEALTHCHECK` on `/healthz`) and `docker-compose.yml`. Secrets are **never** committed: Compose refuses to start unless `JWT_SECRET` and `JWT_REFRESH_SECRET` are provided.
+
+> **Use a dedicated env file for production.** Docker Compose automatically reads a `.env` file next to `docker-compose.yml`, which in a development checkout holds your *development* secrets. Keep production values in a separate file and pass it explicitly. `.env.*` files are git-ignored.
 
 ```bash
-# Provide secrets (e.g. in .env next to docker-compose.yml)
-echo "JWT_SECRET=$(openssl rand -base64 48)" >> .env
-echo "JWT_REFRESH_SECRET=$(openssl rand -base64 48)" >> .env
+# 1. Create the production env file (never commit it)
+cat > .env.production <<EOF
+JWT_SECRET=$(openssl rand -base64 48)
+JWT_REFRESH_SECRET=$(openssl rand -base64 48)
+ADMIN_EMAIL=admin@yourdomain.com
+ADMIN_PASSWORD=change-me-please-12345
+EOF
 
-# Build and start container in detached mode
-docker compose up -d
+# 2. Build and start in detached mode
+docker compose --env-file .env.production up -d --build
 
 # View container logs
-docker compose logs -f
+docker compose --env-file .env.production logs -f
 
 # Stop container
-docker compose down
+docker compose --env-file .env.production down
 ```
 
-The named volume `sqlite_data` persists your SQLite database across container restarts. On startup the entrypoint runs `prisma migrate deploy`.
+Compose evaluates the whole file on every command, so pass `--env-file` to all of them (or `export COMPOSE_ENV_FILES=.env.production` once). The compose file forwards every variable of the [Configuration](#-configuration) table except `PORT` (fixed to `3011` inside the container) and `DATABASE_URL` (fixed to `file:/app/data/prod.db` on the persistent volume). The named volume `sqlite_data` keeps your SQLite database across restarts, and on startup the entrypoint runs `prisma migrate deploy` (see [Database migrations](#database-migrations)). Docs are off in production unless you set `ENABLE_DOCS=true`.
 
-| Variable | Default | Description |
-|---|---|---|
-| `JWT_SECRET` / `JWT_REFRESH_SECRET` | — (required) | HS256 signing secrets (min 16 chars, 32+ recommended) |
-| `DATABASE_URL` | `file:./dev.db` | SQLite file (or `TURSO_DATABASE_URL` + `TURSO_AUTH_TOKEN`) |
-| `TRUST_PROXY` | `false` | Trust `X-Forwarded-For` / `CF-Connecting-IP` for client IPs |
-| `CORS_ORIGINS` | `*` | Comma-separated allowed origins |
-| `ENABLE_DOCS` | `true` outside production | Expose `/docs` and `/openapi.json` |
-| `LOGIN_RATE_LIMIT_MAX` / `REFRESH_RATE_LIMIT_MAX` / `REGISTER_RATE_LIMIT_MAX` | `10` / `30` / `5` | Per-IP limits (per minute; register per hour) |
-| `REFRESH_REUSE_GRACE_SECONDS` | `10` | Concurrent refresh window before reuse is treated as theft |
-| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | — | Bootstrap the first admin in production on an empty database |
-| `LOG_LEVEL` | `info` (prod) / `debug` | Pino log level |
+**Backups:** the image has no `sqlite3` binary. Back up the volume with a throwaway container (replace `<project>_sqlite_data` with the volume name shown by `docker volume ls`):
+
+```bash
+mkdir -p backups
+docker run --rm -v <project>_sqlite_data:/data -v "$PWD/backups:/backups" alpine \
+  sh -c 'apk add --no-cache sqlite >/dev/null && sqlite3 /data/prod.db ".backup /backups/prod-$(date +%Y%m%d%H%M%S).db"'
+```
 
 ---
 
@@ -450,7 +552,9 @@ Contributions are welcome! Please follow these steps:
 
 1. **Fork the Repository** and create a feature branch (`git checkout -b feature/amazing-feature`).
 2. **Ensure Type Safety**: Run `npm run build` to verify there are zero TypeScript errors.
-3. **Run Tests**: Verify your changes with `./test-api.sh`.
+3. **Run the checks**: `npm run typecheck && npm run lint && npm test` (plus `npm run test:e2e` against a running dev server if you touch auth or sessions). CI runs the same checks, an `npm audit`, and verifies that migrations match `schema.prisma`.
+   - Schema change? Create a migration with `npm run db:migrate -- --name <change>`, run `npm run db:generate`, and commit the migration.
+   - New or changed endpoint? Declare it with `createRoute` (docs update themselves) and add it to the Bruno collection.
 4. **Follow Commits Conventions**: Use Conventional Commits (`feat:`, `fix:`, `docs:`, `chore:`).
 5. **Open a Pull Request**: GitHub will automatically load the [Pull Request Template](.github/PULL_REQUEST_TEMPLATE.md).
 
