@@ -11,6 +11,7 @@ import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import { prisma } from "../db.js";
 import type { TaskWhereInput } from "../generated/client/models.js";
+import { successResponse } from "../lib/response.js";
 import { createTaskSchema, taskQuerySchema, updateTaskSchema } from "../schemas/index.js";
 import type { AppEnv, PaginationMeta } from "../types/index.js";
 
@@ -72,14 +73,14 @@ taskRoutes.get(
       hasPrevPage: page > 1,
     };
 
-    return c.json({
-      success: true,
-      pagination,
-      data: tasks.map((t) => ({
+    return successResponse(
+      c,
+      tasks.map((t) => ({
         ...t,
         createdAt: t.createdAt.toISOString(),
       })),
-    });
+      { pagination },
+    );
   },
 );
 
@@ -116,12 +117,9 @@ taskRoutes.get("/:id", async (c) => {
     );
   }
 
-  return c.json({
-    success: true,
-    data: {
-      ...task,
-      createdAt: task.createdAt.toISOString(),
-    },
+  return successResponse(c, {
+    ...task,
+    createdAt: task.createdAt.toISOString(),
   });
 });
 
@@ -156,16 +154,16 @@ taskRoutes.post(
       },
     });
 
-    return c.json(
+    return successResponse(
+      c,
       {
-        success: true,
-        message: "Task created successfully.",
-        data: {
-          ...newTask,
-          createdAt: newTask.createdAt.toISOString(),
-        },
+        ...newTask,
+        createdAt: newTask.createdAt.toISOString(),
       },
-      201,
+      {
+        status: 201,
+        message: "Task created successfully.",
+      },
     );
   },
 );
@@ -228,14 +226,14 @@ taskRoutes.put(
       },
     });
 
-    return c.json({
-      success: true,
-      message: "Task updated successfully.",
-      data: {
+    return successResponse(
+      c,
+      {
         ...updatedTask,
         createdAt: updatedTask.createdAt.toISOString(),
       },
-    });
+      { message: "Task updated successfully." },
+    );
   },
 );
 
@@ -276,12 +274,12 @@ taskRoutes.delete("/:id", async (c) => {
     where: { id },
   });
 
-  return c.json({
-    success: true,
-    message: "Task deleted successfully.",
-    data: {
+  return successResponse(
+    c,
+    {
       ...deletedTask,
       createdAt: deletedTask.createdAt.toISOString(),
     },
-  });
+    { message: "Task deleted successfully." },
+  );
 });

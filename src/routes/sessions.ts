@@ -7,6 +7,7 @@
 
 import { Hono } from "hono";
 import { prisma } from "../db.js";
+import { buildMeta } from "../lib/response.js";
 import type { AppEnv } from "../types/index.js";
 
 export const sessionRoutes = new Hono<AppEnv>();
@@ -33,6 +34,7 @@ sessionRoutes.get("/me", async (c) => {
       expiresAt: s.expiresAt.toISOString(),
       isCurrent: s.id === currentUser.sessionId,
     })),
+    meta: buildMeta(c),
   });
 });
 

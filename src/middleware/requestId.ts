@@ -9,6 +9,9 @@ import type { Context, Next } from "hono";
 import type { AppEnv } from "../types/index.js";
 
 export async function requestIdMiddleware(c: Context<AppEnv>, next: Next) {
+  const start = performance.now();
+  c.set("startTime", start);
+
   // Use incoming request ID from upstream load balancers or generate a fresh UUID v4
   const incomingId = c.req.header("X-Request-Id");
   const reqId = incomingId || randomUUID();
@@ -18,4 +21,9 @@ export async function requestIdMiddleware(c: Context<AppEnv>, next: Next) {
   c.header("X-Request-Id", reqId);
 
   await next();
+
+  // Calculate elapsed server duration and inject standard timing headers
+  const elapsedMs = (performance.now() - start).toFixed(2);
+  c.header("X-Response-Time", `${elapsedMs}ms`);
+  c.header("Server-Timing", `total;dur=${elapsedMs}`);
 }

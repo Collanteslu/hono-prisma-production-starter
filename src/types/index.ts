@@ -62,6 +62,7 @@ export interface JwtPayload {
 export type AppVariables = {
   user: JwtPayload;
   requestId: string;
+  startTime: number;
 };
 
 /**
@@ -81,4 +82,14 @@ export interface PaginationMeta {
   totalPages: number;
   hasNextPage: boolean;
   hasPrevPage: boolean;
+}
+
+/**
+ * Standardized metadata envelope attached to API responses for observability and telemetry.
+ */
+export interface ResponseMeta {
+  requestId: string;
+  timestamp: string;
+  durationMs: number;
+  apiVersion?: string;
 }

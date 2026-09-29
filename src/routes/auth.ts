@@ -9,6 +9,7 @@ import { Hono } from "hono";
 import { sign, verify } from "hono/jwt";
 import { env } from "../config/env.js";
 import { prisma } from "../db.js";
+import { buildMeta } from "../lib/response.js";
 import { rateLimiter } from "../middleware/rateLimit.js";
 import { loginSchema, logoutSchema, refreshTokenSchema } from "../schemas/index.js";
 import type { AppEnv } from "../types/index.js";
@@ -169,6 +170,7 @@ authRoutes.post(
         email: user.email,
         role: user.role,
       },
+      meta: buildMeta(c),
     });
   },
 );
@@ -297,6 +299,7 @@ authRoutes.post(
         refreshToken: newRefreshToken,
         expiresIn: 60 * 15,
         sessionId: payload.sessionId,
+        meta: buildMeta(c),
       });
     } catch (_err) {
       return c.json(

@@ -28,10 +28,17 @@ describe("Tasks CRUD & Ownership API", () => {
     });
 
     expect(res.status).toBe(200);
+    expect(res.headers.get("X-Response-Time")).toBeDefined();
+    expect(res.headers.get("Server-Timing")).toContain("total;dur=");
+
     const data = await res.json();
     expect(data.success).toBe(true);
     expect(Array.isArray(data.data)).toBe(true);
     expect(data.pagination).toBeDefined();
+    expect(data.meta).toBeDefined();
+    expect(data.meta.durationMs).toBeTypeOf("number");
+    expect(data.meta.requestId).toBeTypeOf("string");
+    expect(data.meta.timestamp).toBeTypeOf("string");
   });
 
   it("POST /api/tasks should create a task associated with authenticated user", async () => {

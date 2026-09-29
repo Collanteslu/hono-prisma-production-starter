@@ -220,6 +220,38 @@ console.log(data.data[0].title);
 
 ---
 
+## 📦 Standard Response Envelope & Telemetry
+
+Following API conventions (JSON:API, RFC 7807), responses include telemetry metadata (`meta`) and standard HTTP headers (`Server-Timing`, `X-Response-Time`, `X-Request-Id`):
+
+```json
+{
+  "success": true,
+  "data": [ ... ],
+  "pagination": {
+    "total": 42,
+    "page": 1,
+    "limit": 10,
+    "totalPages": 5,
+    "hasNextPage": true,
+    "hasPrevPage": false
+  },
+  "meta": {
+    "requestId": "e15822e1-4560-4416-836b-67a6d80ff0a9",
+    "timestamp": "2026-09-29T20:00:00.000Z",
+    "durationMs": 4.12,
+    "apiVersion": "1.1.0"
+  }
+}
+```
+
+### HTTP Response Headers
+- `X-Request-Id`: Unique request trace identifier.
+- `X-Response-Time`: Server-side processing duration (e.g., `4.12ms`).
+- `Server-Timing`: Standard W3C timing header (`total;dur=4.12`) displayed natively in Chrome DevTools Network panel.
+
+---
+
 ## 📡 Endpoints Reference
 
 ### Health & Observability
