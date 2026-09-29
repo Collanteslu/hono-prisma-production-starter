@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { prisma } from "../src/db.js";
-import { app, bearer, createTestUser, login, loginAdmin } from "./helpers.js";
+import { app, bearer, createTestUser, jsonHeaders, login, loginAdmin } from "./helpers.js";
 
 describe("User management", () => {
   it("changing the password revokes other sessions but keeps the current one", async () => {
@@ -85,6 +85,14 @@ describe("User management", () => {
     const me = await app.request("/api/sessions/me", { headers: bearer(user.accessToken) });
     expect(me.status).toBe(403);
 
+    // The suspended account can no longer sign in either
+    const relogin = await app.request("/api/auth/login", {
+      method: "POST",
+      headers: jsonHeaders,
+      body: JSON.stringify({ email: user.email, password: user.password }),
+    });
+    expect(relogin.status).toBe(403);
+
     const logs = await app.request(`/api/audit-logs?action=BLOCK&userId=${admin.user.id}`, {
       headers: bearer(admin.accessToken),
     });
@@ -149,5 +157,32 @@ describe("Tasks soft delete & restore", () => {
       headers: bearer(intruder.accessToken),
     });
     expect(res.status).toBe(403);
+  });
+});
+
+describe("Task search", () => {
+  it("?search matches title and description within the owner's own tasks", async () => {
+    const owner = await createTestUser();
+    const other = await createTestUser();
+    const create = (token: string, title: string, description = "") =>
+      app.request("/api/tasks", {
+        method: "POST",
+        headers: bearer(token),
+        body: JSON.stringify({ title, description }),
+      });
+    await create(owner.accessToken, "Quarterly report");
+    await create(owner.accessToken, "Groceries", "buy report paper");
+    await create(owner.accessToken, "Unrelated task");
+    await create(other.accessToken, "Someone else's report");
+
+    const res = await app.request("/api/tasks?search=report", {
+      headers: bearer(owner.accessToken),
+    });
+    const { data, pagination } = await res.json();
+    expect(pagination.total).toBe(2);
+    expect(data.map((t: { title: string }) => t.title).sort()).toEqual([
+      "Groceries",
+      "Quarterly report",
+    ]);
   });
 });
