@@ -249,7 +249,7 @@ sequenceDiagram
 - **Hashed refresh tokens**: only SHA-256 digests are persisted, so a database leak does not expose usable tokens.
 - **Real-time authorization**: blocking, soft-deleting, role changes and session revocation take effect on the very next request (role is read from the database, not from the JWT).
 - **Brute-force protection**: per-IP rate limits on `/login`, `/refresh` and `/register`, plus a per-account lockout after 5 failed logins (15 min). Limits are in-memory (per instance). Note the lockout is keyed by email, so someone can deliberately lock a known address for 15 minutes; this is the usual trade-off against credential stuffing.
-- **Trusted client IP**: `X-Forwarded-For` / `CF-Connecting-IP` are only honoured when `TRUST_PROXY=true` (sessions, audit log and rate limiting).
+- **Trusted client IP**: `X-Forwarded-For` is only honoured when `TRUST_PROXY=true`, and it is read **from the right** (`TRUST_PROXY_HOPS` trusted proxies, default 1) because the leftmost entries are client-controlled. `CF-Connecting-IP` and `X-Real-IP` are ignored, since clients can set them and many proxies forward them untouched. Used for sessions, the audit log and rate limiting.
 - **Password policy**: 8–72 characters (bcrypt cost 12). Changing a password revokes every other session of the account.
 - **Startup guards**: the app refuses to boot without `JWT_SECRET` / `JWT_REFRESH_SECRET`, and in production requires both to be at least 32 characters and different from each other. `.env.example` ships with blank secrets on purpose.
 - **Admin safety**: the last active administrator cannot delete their account; deleted accounts cannot be reactivated.
@@ -495,9 +495,10 @@ All settings are environment variables, validated at startup (the process exits 
 | `JWT_SECRET` / `JWT_REFRESH_SECRET` | — (**required**) | HS256 signing secrets, at least 16 characters. **In production: at least 32 characters and different from each other.** Generate with `openssl rand -base64 48` |
 | `NODE_ENV` | `development` | `development`, `production` or `test`. Production disables the demo seeder and, by default, the docs |
 | `PORT` | `3011` | HTTP port |
-| `DATABASE_URL` | `file:./dev.db` | Local SQLite file (relative paths resolve from the working directory) |
+| `DATABASE_URL` | `file:./dev.db` (`file:/app/data/prod.db` in the Docker image) | Local SQLite file (relative paths resolve from the working directory) |
 | `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` | — | Use a remote Turso/libSQL database instead of the local file |
-| `TRUST_PROXY` | `false` | Trust `X-Forwarded-For` / `CF-Connecting-IP` for client IPs (enable only behind a trusted reverse proxy) |
+| `TRUST_PROXY` | `false` | Trust `X-Forwarded-For` for client IPs (enable only behind a trusted reverse proxy that appends to it, e.g. Traefik or Nginx) |
+| `TRUST_PROXY_HOPS` | `1` | Number of trusted proxies in front of the API (`2` for e.g. Cloudflare + Traefik). Without a proxy header of that depth the socket address is used |
 | `CORS_ORIGINS` | `*` | Comma-separated allowed origins |
 | `ENABLE_DOCS` | `true` outside production | Expose `/docs` and `/openapi.json` |
 | `LOGIN_RATE_LIMIT_MAX` / `REFRESH_RATE_LIMIT_MAX` / `REGISTER_RATE_LIMIT_MAX` | `10` / `30` / `5` | Per-IP limits (login and refresh per minute; register per hour) |
@@ -534,7 +535,7 @@ docker compose --env-file .env.production logs -f
 docker compose --env-file .env.production down
 ```
 
-Compose evaluates the whole file on every command, so pass `--env-file` to all of them (or `export COMPOSE_ENV_FILES=.env.production` once). The compose file forwards every variable of the [Configuration](#-configuration) table except `PORT` (fixed to `3011` inside the container) and `DATABASE_URL` (fixed to `file:/app/data/prod.db` on the persistent volume). The named volume `sqlite_data` keeps your SQLite database across restarts, and on startup the entrypoint runs `prisma migrate deploy` (see [Database migrations](#database-migrations)). Docs are off in production unless you set `ENABLE_DOCS=true`.
+Compose evaluates the whole file on every command, so pass `--env-file` to all of them (or `export COMPOSE_ENV_FILES=.env.production` once). The compose file forwards every variable of the [Configuration](#-configuration) table except `PORT` (fixed to `3011` inside the container) and `DATABASE_URL` (fixed to `file:/app/data/prod.db` on the persistent volume; the image also defaults to it, so even `docker run` without the variable keeps data on the volume). The named volume `sqlite_data` keeps your SQLite database across restarts, and on startup the entrypoint runs `prisma migrate deploy` (see [Database migrations](#database-migrations)). Docs are off in production unless you set `ENABLE_DOCS=true`.
 
 **Backups:** the image has no `sqlite3` binary. Back up the volume with a throwaway container (replace `<project>_sqlite_data` with the volume name shown by `docker volume ls`):
 

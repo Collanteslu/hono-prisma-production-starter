@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { parseFilters, parseSorting } from "../src/lib/query.js";
 import { createLoginLockout, rateLimiter } from "../src/middleware/rateLimit.js";
 
@@ -90,5 +90,39 @@ describe("createLoginLockout", () => {
     expect(lockout.retryAfterSeconds("a@example.com")).toBeGreaterThan(0);
     lockout.reset("a@example.com");
     expect(lockout.retryAfterSeconds("a@example.com")).toBe(0);
+  });
+});
+
+describe("client IP resolution behind a proxy", () => {
+  it("pickForwardedIp reads X-Forwarded-For from the right and ignores spoofed entries", async () => {
+    const { pickForwardedIp } = await import("../src/lib/clientIp.js");
+    // The client sent "6.6.6.6"; the trusted proxy appended the address it actually saw
+    expect(pickForwardedIp("6.6.6.6, 203.0.113.9", 1)).toBe("203.0.113.9");
+    // Two trusted proxies (e.g. Cloudflare + Traefik): "client, cloudflare-edge"
+    expect(pickForwardedIp("203.0.113.9, 172.70.0.1", 2)).toBe("203.0.113.9");
+    expect(pickForwardedIp("1.1.1.1, 203.0.113.9, 172.70.0.1", 2)).toBe("203.0.113.9");
+    // Header shorter than the trusted chain: do not guess, fall back to the socket address
+    expect(pickForwardedIp("203.0.113.9", 2)).toBeUndefined();
+    expect(pickForwardedIp(undefined, 1)).toBeUndefined();
+    expect(pickForwardedIp(" , ", 1)).toBeUndefined();
+  });
+
+  it("with TRUST_PROXY, getClientIp ignores CF-Connecting-IP / X-Real-IP and the leftmost XFF entry", async () => {
+    vi.resetModules();
+    vi.stubEnv("TRUST_PROXY", "true");
+    vi.stubEnv("TRUST_PROXY_HOPS", "1");
+    try {
+      const { getClientIp } = await import("../src/lib/clientIp.js");
+      const headers: Record<string, string> = {
+        "x-forwarded-for": "6.6.6.6, 203.0.113.9",
+        "cf-connecting-ip": "7.7.7.7",
+        "x-real-ip": "8.8.8.8",
+      };
+      const ctx = { req: { header: (name: string) => headers[name.toLowerCase()] } };
+      expect(getClientIp(ctx as never)).toBe("203.0.113.9");
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
   });
 });

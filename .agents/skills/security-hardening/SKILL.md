@@ -52,7 +52,7 @@ The reference implementations are `src/middleware/auth.ts`, `src/services/sessio
 - Rate limit state is in memory: it is per instance. Move it to a shared store before scaling horizontally.
 
 ### 5. Client IP and Proxies
-- Always resolve the IP with `getClientIp(c)` (`src/lib/clientIp.ts`). `X-Forwarded-For`, `CF-Connecting-IP` and `X-Real-IP` are trusted **only** when `TRUST_PROXY=true`; otherwise they can be spoofed and would poison sessions, audit logs and rate limiting.
+- Always resolve the IP with `getClientIp(c)` (`src/lib/clientIp.ts`). `X-Forwarded-For` is trusted **only** when `TRUST_PROXY=true`, and read from the right (`TRUST_PROXY_HOPS` trusted proxies): the leftmost entries are client-controlled. `CF-Connecting-IP` and `X-Real-IP` are ignored on purpose (a client can set them and many proxies forward them untouched). Otherwise spoofed values would poison sessions, audit logs and rate limiting.
 
 ### 6. Passwords and Secrets
 - Hash with `hashPassword()` from `src/utils/password.ts` (bcrypt, 12 rounds). Passwords are 8–72 characters (bcrypt ignores anything beyond 72 bytes).
