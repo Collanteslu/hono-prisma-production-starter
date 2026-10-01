@@ -24,7 +24,7 @@ export function inBackground(task: () => Promise<unknown>): void {
 
 export async function sendVerificationEmail(user: Recipient): Promise<void> {
   const token = await createAuthToken(
-    user.id,
+    user,
     "email_verify",
     env.EMAIL_VERIFY_TTL_HOURS * 60 * minutes(1),
   );
@@ -37,7 +37,7 @@ export async function sendVerificationEmail(user: Recipient): Promise<void> {
 
 export async function sendPasswordResetEmail(user: Recipient): Promise<void> {
   const token = await createAuthToken(
-    user.id,
+    user,
     "password_reset",
     minutes(env.PASSWORD_RESET_TTL_MINUTES),
   );

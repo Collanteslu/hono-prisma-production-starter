@@ -38,6 +38,7 @@ model AuthToken {
   id        String    @id @default(uuid())
   userId    String
   type      String // "password_reset" | "email_verify"
+  email     String // address the token was emailed to: it only works while it is still the account's email
   tokenHash String    @unique
   expiresAt DateTime
   usedAt    DateTime?

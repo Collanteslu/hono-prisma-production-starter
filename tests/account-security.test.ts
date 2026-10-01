@@ -470,3 +470,115 @@ describe("Messages are in English", () => {
     expect(text).not.toMatch(/contraseña|debe tener/i);
   });
 });
+
+describe("Emailed tokens after an email or password change", () => {
+  const putUser = (user: { user: { id: string }; accessToken: string }, body: unknown) =>
+    app.request(`/api/users/${user.user.id}`, {
+      method: "PUT",
+      headers: bearer(user.accessToken),
+      body: JSON.stringify(body),
+    });
+
+  it("a reset link sent to the old address stops working once the email changes", async () => {
+    const user = await createTestUser();
+    const before = outbox.length;
+    await post("/api/auth/forgot-password", { email: user.email });
+    const token = await tokenEmailedTo(user.email, before);
+
+    const newEmail = `moved-${randomUUID()}@example.com`;
+    const mark = outbox.length;
+    expect((await putUser(user, { email: newEmail, currentPassword: user.password })).status).toBe(
+      200,
+    );
+    await tokenEmailedTo(newEmail, mark);
+
+    const reset = await post("/api/auth/reset-password", { token, password: "brand-new-pass-1" });
+    expect(reset.status).toBe(400);
+    const stored = await prisma.user.findUniqueOrThrow({ where: { id: user.user.id } });
+    // The new, never confirmed address must not end up verified, and the password is unchanged
+    expect(stored.emailVerifiedAt).toBeNull();
+    await expect(login(newEmail, user.password)).resolves.toBeDefined();
+  });
+
+  it("a verification link sent to the old address cannot verify the new one", async () => {
+    const before = outbox.length;
+    const user = await createTestUser();
+    const oldToken = await tokenEmailedTo(user.email, before);
+
+    const newEmail = `moved-${randomUUID()}@example.com`;
+    const mark = outbox.length;
+    expect((await putUser(user, { email: newEmail, currentPassword: user.password })).status).toBe(
+      200,
+    );
+    const newToken = await tokenEmailedTo(newEmail, mark);
+
+    expect((await post("/api/auth/verify-email", { token: oldToken })).status).toBe(400);
+    expect(
+      (await prisma.user.findUniqueOrThrow({ where: { id: user.user.id } })).emailVerifiedAt,
+    ).toBeNull();
+
+    // The link sent to the new address does work
+    expect((await post("/api/auth/verify-email", { token: newToken })).status).toBe(200);
+    expect(
+      (await prisma.user.findUniqueOrThrow({ where: { id: user.user.id } })).emailVerifiedAt,
+    ).not.toBeNull();
+  });
+
+  it("changing the password deletes every pending reset and verification link", async () => {
+    const user = await createTestUser();
+    await prisma.user.update({ where: { id: user.user.id }, data: { emailVerifiedAt: null } });
+    const before = outbox.length;
+    await post("/api/auth/forgot-password", { email: user.email });
+    const resetToken = await tokenEmailedTo(user.email, before);
+    const mark = outbox.length;
+    await post("/api/auth/resend-verification", { email: user.email });
+    const verifyToken = await tokenEmailedTo(user.email, mark);
+
+    expect(
+      (await putUser(user, { password: "changed-pass-123", currentPassword: user.password }))
+        .status,
+    ).toBe(200);
+
+    expect(await prisma.authToken.count({ where: { userId: user.user.id, usedAt: null } })).toBe(0);
+    expect(
+      (await post("/api/auth/reset-password", { token: resetToken, password: "brand-new-pass-1" }))
+        .status,
+    ).toBe(400);
+    expect((await post("/api/auth/verify-email", { token: verifyToken })).status).toBe(400);
+    await expect(login(user.email, "changed-pass-123")).resolves.toBeDefined();
+  });
+
+  it("an admin changing someone's email or password also deletes their pending links", async () => {
+    const admin = await loginAdmin();
+    const user = await createTestUser();
+    const before = outbox.length;
+    await post("/api/auth/forgot-password", { email: user.email });
+    const token = await tokenEmailedTo(user.email, before);
+
+    const res = await app.request(`/api/users/${user.user.id}`, {
+      method: "PUT",
+      headers: bearer(admin.accessToken),
+      body: JSON.stringify({ email: `admin-moved-${randomUUID()}@example.com` }),
+    });
+    expect(res.status).toBe(200);
+    expect(
+      (await post("/api/auth/reset-password", { token, password: "brand-new-pass-1" })).status,
+    ).toBe(400);
+  });
+
+  it("a token issued to an address the account no longer has is rejected", async () => {
+    // Simulates a link created in the background just before (or racing with) an email change
+    const user = await createTestUser();
+    const before = outbox.length;
+    await post("/api/auth/forgot-password", { email: user.email });
+    const token = await tokenEmailedTo(user.email, before);
+    await prisma.user.update({
+      where: { id: user.user.id },
+      data: { email: `raced-${randomUUID()}@example.com` },
+    });
+
+    expect(
+      (await post("/api/auth/reset-password", { token, password: "brand-new-pass-1" })).status,
+    ).toBe(400);
+  });
+});

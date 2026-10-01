@@ -25,7 +25,7 @@ import {
   sendPasswordResetEmail,
   sendVerificationEmail,
 } from "../services/accountMail.js";
-import { consumeAuthToken } from "../services/authTokens.js";
+import { consumeAuthToken, deletePendingAuthTokensOp } from "../services/authTokens.js";
 import { userSessionRevocationOps } from "../services/sessions.js";
 import { hashPassword } from "../utils/password.js";
 
@@ -154,16 +154,17 @@ export const recoveryRoutes = router
       return errorResponse(c, "Invalid or expired reset token.", 400);
     }
 
-    // New password + revocation of every session in one transaction
+    // New password + revocation of every session and pending emailed token in one transaction
     await prisma.$transaction([
       prisma.user.update({
         where: { id: user.id },
         data: {
           password: await hashPassword(password),
-          // Whoever received the email controls the mailbox
+          // Whoever received the email controls the mailbox (the token is bound to this address)
           emailVerifiedAt: user.emailVerifiedAt ?? new Date(),
         },
       }),
+      deletePendingAuthTokensOp(user.id),
       ...userSessionRevocationOps(user.id),
     ]);
     await clearBucket(`lockout:${user.email}`);
