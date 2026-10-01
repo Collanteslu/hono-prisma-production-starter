@@ -21,7 +21,7 @@ const listRoute = createRoute({
   tags: ["Audit"],
   summary: "Consultar registros de auditoría (Solo Admin)",
   description:
-    "Acciones registradas: LOGIN, LOGIN_FAILED, LOGOUT, REGISTER, CREATE, UPDATE, PASSWORD_CHANGE, SOFT_DELETE, RESTORE, DELETE_PERMANENT, BLOCK, UNBLOCK, REVOKE_SESSION, REVOKE_ALL_SESSIONS, TOKEN_REUSE_DETECTED.",
+    "Acciones registradas: LOGIN, LOGIN_FAILED, LOGOUT, REGISTER, CREATE, UPDATE, PASSWORD_CHANGE, ROLE_CHANGE, SOFT_DELETE, RESTORE, DELETE_PERMANENT, BLOCK, UNBLOCK, REVOKE_SESSION, REVOKE_ALL_SESSIONS, TOKEN_REUSE_DETECTED.",
   security: secured,
   middleware: [requireAdmin] as const,
   request: { query: auditQuerySchema },

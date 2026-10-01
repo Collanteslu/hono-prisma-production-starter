@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { prisma } from "../src/db.js";
 import app from "../src/index.js";
 import { hashToken } from "../src/services/sessions.js";
+import { createTestUser, jsonHeaders } from "./helpers.js";
 
 describe("Authentication & Session API", () => {
   let accessToken = "";
@@ -74,6 +75,31 @@ describe("Authentication & Session API", () => {
     expect(data.accessToken).toBeDefined();
     expect(data.refreshToken).toBeDefined();
     expect(data.refreshToken).not.toBe(refreshToken); // rotated
+  });
+
+  it("a rotated refresh token never outlives the session's absolute expiry", async () => {
+    const user = await createTestUser();
+    // Pretend the session was opened 2 days ago, so a fresh full TTL would clearly overshoot it
+    const session = await prisma.session.update({
+      where: { id: user.sessionId },
+      data: { expiresAt: new Date(Math.floor(Date.now() / 1000) * 1000 + 5 * 24 * 3600 * 1000) },
+    });
+
+    const res = await app.request("/api/auth/refresh", {
+      method: "POST",
+      headers: jsonHeaders,
+      body: JSON.stringify({ refreshToken: user.refreshToken }),
+    });
+    expect(res.status).toBe(200);
+    const { refreshToken } = await res.json();
+
+    const stored = await prisma.refreshToken.findUniqueOrThrow({
+      where: { tokenHash: hashToken(refreshToken) },
+    });
+    expect(stored.expiresAt.getTime()).toBe(session.expiresAt.getTime());
+    const [, payload] = refreshToken.split(".");
+    const { exp } = JSON.parse(Buffer.from(payload, "base64url").toString());
+    expect(exp).toBe(Math.floor(session.expiresAt.getTime() / 1000));
   });
 
   it("POST /api/auth/refresh reusing an already rotated token should terminate session", async () => {

@@ -10,7 +10,7 @@ describe("User management", () => {
     const res = await app.request(`/api/users/${user.user.id}`, {
       method: "PUT",
       headers: bearer(user.accessToken),
-      body: JSON.stringify({ password: "new-password-456" }),
+      body: JSON.stringify({ password: "new-password-456", currentPassword: user.password }),
     });
     expect(res.status).toBe(200);
 
@@ -22,6 +22,57 @@ describe("User management", () => {
     expect(other.status).toBe(401);
 
     await expect(login(user.email, "new-password-456")).resolves.toBeDefined();
+  });
+
+  it("changing your own password requires the current one and changes nothing otherwise", async () => {
+    const user = await createTestUser();
+    const otherDevice = await login(user.email, user.password);
+
+    for (const body of [
+      { password: "new-password-456" },
+      { password: "new-password-456", currentPassword: "wrong-password" },
+    ]) {
+      const res = await app.request(`/api/users/${user.user.id}`, {
+        method: "PUT",
+        headers: bearer(user.accessToken),
+        body: JSON.stringify(body),
+      });
+      expect(res.status).toBe(403);
+    }
+
+    // Password unchanged and the other session still valid
+    await expect(login(user.email, user.password)).resolves.toBeDefined();
+    const other = await app.request("/api/sessions/me", {
+      headers: bearer(otherDevice.accessToken),
+    });
+    expect(other.status).toBe(200);
+  });
+
+  it("an admin can reset another user's password without knowing the current one", async () => {
+    const user = await createTestUser();
+    const admin = await loginAdmin();
+
+    const res = await app.request(`/api/users/${user.user.id}`, {
+      method: "PUT",
+      headers: bearer(admin.accessToken),
+      body: JSON.stringify({ password: "reset-password-789" }),
+    });
+    expect(res.status).toBe(200);
+    await expect(login(user.email, "reset-password-789")).resolves.toBeDefined();
+  });
+
+  it("rejects passwords longer than 72 bytes even when under 72 characters", async () => {
+    // 40 emoji = 40 characters but 160 bytes: bcrypt would silently truncate it
+    const res = await app.request("/api/auth/register", {
+      method: "POST",
+      headers: jsonHeaders,
+      body: JSON.stringify({
+        name: "Emoji User",
+        email: `emoji-${Date.now()}@example.com`,
+        password: "😀".repeat(40),
+      }),
+    });
+    expect(res.status).toBe(400);
   });
 
   it("never returns password hashes", async () => {
@@ -156,7 +207,7 @@ describe("Tasks soft delete & restore", () => {
       method: "POST",
       headers: bearer(intruder.accessToken),
     });
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(404);
   });
 });
 

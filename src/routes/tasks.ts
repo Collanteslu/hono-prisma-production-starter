@@ -4,7 +4,7 @@
  *
  * Security Model:
  * Standard users can ONLY read, create, update, and delete tasks they own.
- * Any attempt to access a task belonging to another user results in HTTP 403 Forbidden.
+ * A task belonging to another user is indistinguishable from a missing one (HTTP 404).
  * Soft-deleted tasks are hidden (404) except when explicitly requested or restored.
  */
 
@@ -50,14 +50,9 @@ async function findOwnedTask(
     return { error: errorResponse(c, `Task with ID '${id}' not found.`, 404) };
   }
 
+  // Someone else's task answers exactly like a missing one, so IDs cannot be probed for existence
   if (task.userId !== c.get("user").userId) {
-    return {
-      error: errorResponse(
-        c,
-        `Access denied: You do not have permission to ${options.action} this task.`,
-        403,
-      ),
-    };
+    return { error: errorResponse(c, `Task with ID '${id}' not found.`, 404) };
   }
 
   return { task };
@@ -91,8 +86,7 @@ const getRoute = createRoute({
     200: jsonResponse(successSchema(taskSchema), "Tarea"),
     ...errorResponses({
       ...authErrors,
-      403: "La tarea pertenece a otro usuario",
-      404: "Tarea no encontrada",
+      404: "Tarea no encontrada (o pertenece a otro usuario)",
     }),
   },
 });
@@ -124,8 +118,7 @@ const updateRoute = createRoute({
     ...errorResponses({
       400: "Error de validación",
       ...authErrors,
-      403: "La tarea pertenece a otro usuario",
-      404: "Tarea no encontrada",
+      404: "Tarea no encontrada (o pertenece a otro usuario)",
     }),
   },
 });
@@ -142,8 +135,7 @@ const restoreRoute = createRoute({
     200: jsonResponse(successSchema(taskSchema), "Tarea restaurada"),
     ...errorResponses({
       ...authErrors,
-      403: "La tarea pertenece a otro usuario",
-      404: "Tarea no encontrada",
+      404: "Tarea no encontrada (o pertenece a otro usuario)",
       409: "La tarea no está eliminada",
     }),
   },
@@ -167,7 +159,6 @@ const deleteRoute = createRoute({
     ),
     ...errorResponses({
       ...authErrors,
-      403: "La tarea pertenece a otro usuario",
       404: "Tarea no encontrada (o ya eliminada, salvo con `permanent=true`)",
     }),
   },
@@ -245,13 +236,13 @@ export const taskRoutes = router
       include,
     });
 
-    if (!task || (task.deletedAt && includeDeleted !== "true")) {
+    // Missing, soft-deleted and foreign tasks all answer 404 (no existence oracle for other users' IDs)
+    if (
+      !task ||
+      (task.deletedAt && includeDeleted !== "true") ||
+      task.userId !== c.get("user").userId
+    ) {
       return errorResponse(c, `Task with ID '${id}' not found.`, 404);
-    }
-
-    // Ownership verification
-    if (task.userId !== c.get("user").userId) {
-      return errorResponse(c, "Access denied: You do not have permission to view this task.", 403);
     }
 
     return successResponse(c, task);

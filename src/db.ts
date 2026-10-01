@@ -37,6 +37,8 @@ const libsqlUrl = resolveDatabaseUrl();
 const adapter = new PrismaLibSql({
   url: libsqlUrl,
   authToken: env.TURSO_AUTH_TOKEN,
+  // Wait for the single SQLite writer instead of failing with SQLITE_BUSY under concurrency (ms, local files only)
+  timeout: 5000,
 });
 
 // Password hashes are omitted from every query by default; opt in explicitly with `omit: { password: false }`.

@@ -16,12 +16,17 @@ const emailField = (formatMessage: string) =>
     .openapi({ example: "ana@example.com" });
 
 /**
- * Política de contraseñas. bcrypt solo procesa los primeros 72 bytes, por lo que se limita la longitud.
+ * Política de contraseñas. bcrypt solo procesa los primeros 72 BYTES (no caracteres): una clave con
+ * tildes o emoji se truncaría en silencio, así que el límite real se comprueba en bytes UTF-8.
  */
 const passwordField = z
   .string()
   .min(8, { message: "La contraseña debe tener al menos 8 caracteres" })
   .max(72, { message: "La contraseña no puede exceder 72 caracteres" })
+  .refine((value) => Buffer.byteLength(value, "utf8") <= 72, {
+    message:
+      "La contraseña no puede exceder 72 bytes (los caracteres acentuados y emoji ocupan más de uno)",
+  })
   .openapi({ example: "password123" });
 
 const nameField = z
@@ -86,6 +91,15 @@ export const blockUserSchema = z
   .openapi("BlockUserRequest");
 
 /**
+ * Esquema para cambiar el rol de un usuario.
+ */
+export const changeRoleSchema = z
+  .object({
+    role: z.enum(["admin", "user"]).openapi({ example: "admin" }),
+  })
+  .openapi("ChangeRoleRequest");
+
+/**
  * Esquema para crear un nuevo usuario.
  */
 export const createUserSchema = z
@@ -105,6 +119,11 @@ export const updateUserSchema = z
     name: nameField.optional(),
     email: emailField("Formato de email inválido").optional(),
     password: passwordField.optional(),
+    currentPassword: z.string().min(1).max(200).optional().openapi({
+      description:
+        "Contraseña actual. Obligatoria al cambiar la propia contraseña; un admin que restablece la de otro usuario no la necesita.",
+      example: "password123",
+    }),
   })
   .refine((data) => Object.keys(data).length > 0, {
     message: "Debes proporcionar al menos un campo para actualizar (name, email o password)",

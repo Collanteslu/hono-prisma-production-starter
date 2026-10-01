@@ -42,8 +42,7 @@ const revokeOneRoute = createRoute({
     200: jsonResponse(emptySuccess, "Sesión revocada"),
     ...errorResponses({
       401: "Token ausente, inválido o sesión revocada",
-      403: "La sesión pertenece a otro usuario",
-      404: "Sesión no encontrada",
+      404: "Sesión no encontrada (o pertenece a otro usuario)",
     }),
   },
 });
@@ -100,17 +99,10 @@ export const sessionRoutes = createRouter()
       where: { id: sessionId },
     });
 
-    if (!session) {
+    // Users can only revoke their own sessions (admins can revoke any). A foreign session answers
+    // exactly like a missing one so session IDs cannot be probed for existence.
+    if (!session || (session.userId !== currentUser.userId && currentUser.role !== "admin")) {
       return errorResponse(c, `Session with ID '${sessionId}' not found.`, 404);
-    }
-
-    // Ownership verification: Users can only revoke their own sessions (admins can revoke any)
-    if (session.userId !== currentUser.userId && currentUser.role !== "admin") {
-      return errorResponse(
-        c,
-        "Access denied: You cannot terminate sessions belonging to other users.",
-        403,
-      );
     }
 
     await revokeSession(sessionId);

@@ -38,10 +38,11 @@ const envSchema = z
     TRUST_PROXY_HOPS: z.coerce.number().int().min(1).max(10).default(1),
     ADMIN_EMAIL: z.string().email().optional(),
     ADMIN_PASSWORD: z.string().min(8).max(72).optional(),
-    // Comma-separated list of allowed CORS origins ("*" allows any origin)
+    // Comma-separated list of allowed CORS origins ("*" allows any origin). When unset it defaults to
+    // "*" outside production and to no cross-origin access at all in production.
     CORS_ORIGINS: z
       .string()
-      .default("*")
+      .default(process.env.NODE_ENV === "production" ? "" : "*")
       .transform((val) =>
         val
           .split(",")
@@ -56,6 +57,12 @@ const envSchema = z
     LOGIN_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(10),
     REFRESH_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(30),
     REGISTER_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(5),
+    // Failed passwords before an account is locked, and for how long
+    LOGIN_LOCKOUT_MAX_FAILURES: z.coerce.number().int().positive().default(5),
+    LOGIN_LOCKOUT_MINUTES: z.coerce.number().positive().default(15),
+    // Audit entries older than this many days are purged (0 keeps them forever)
+    AUDIT_RETENTION_DAYS: z.coerce.number().int().min(0).default(90),
+    LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).optional(),
     // Seconds during which reusing a just-rotated refresh token is treated as a concurrent refresh
     REFRESH_REUSE_GRACE_SECONDS: z.coerce.number().int().min(0).default(10),
   })

@@ -41,6 +41,9 @@ jobs:
       - name: ⚡ Linting & Formatting Check (Biome)
         run: npm run lint
 
+      - name: 🐳 Construir la imagen Docker
+        run: docker build -t hono-api:ci .
+
       # Los tests crean y migran su propia base de datos SQLite temporal (ver vitest.config.ts)
       - name: 🧪 Ejecutar Tests Automatizados con cobertura (Vitest)
         run: npm run test:coverage

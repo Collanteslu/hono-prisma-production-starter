@@ -17,7 +17,7 @@ services:
       - DATABASE_URL=file:/app/data/prod.db
       - TRUST_PROXY=${TRUST_PROXY:-false}
       - TRUST_PROXY_HOPS=${TRUST_PROXY_HOPS:-}
-      - CORS_ORIGINS=${CORS_ORIGINS:-*}
+      - CORS_ORIGINS=${CORS_ORIGINS:-}
       - ADMIN_EMAIL=${ADMIN_EMAIL:-}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
       # Opcionales: vacío = valor por defecto de la aplicación
@@ -26,6 +26,9 @@ services:
       - LOGIN_RATE_LIMIT_MAX=${LOGIN_RATE_LIMIT_MAX:-}
       - REFRESH_RATE_LIMIT_MAX=${REFRESH_RATE_LIMIT_MAX:-}
       - REGISTER_RATE_LIMIT_MAX=${REGISTER_RATE_LIMIT_MAX:-}
+      - LOGIN_LOCKOUT_MAX_FAILURES=${LOGIN_LOCKOUT_MAX_FAILURES:-}
+      - LOGIN_LOCKOUT_MINUTES=${LOGIN_LOCKOUT_MINUTES:-}
+      - AUDIT_RETENTION_DAYS=${AUDIT_RETENTION_DAYS:-}
       - REFRESH_REUSE_GRACE_SECONDS=${REFRESH_REUSE_GRACE_SECONDS:-}
       # Turso/libSQL remoto (si se define, sustituye al SQLite local)
       - TURSO_DATABASE_URL=${TURSO_DATABASE_URL:-}

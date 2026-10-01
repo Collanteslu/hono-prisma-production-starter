@@ -23,6 +23,7 @@ export default defineConfig({
       TRUST_PROXY: "false",
       LOG_LEVEL: "silent",
       LOGIN_RATE_LIMIT_MAX: "1000",
+      REFRESH_RATE_LIMIT_MAX: "1000",
       REGISTER_RATE_LIMIT_MAX: "1000",
     },
     coverage: {

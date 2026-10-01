@@ -87,3 +87,13 @@ model AuditLog {
   @@index([createdAt])
   @@index([entity, action])
 }
+
+/// Fixed-window counters shared by every instance (rate limits and login lockout), so limits hold
+/// across replicas when the database is shared (Turso). Expired rows are purged by the cleanup job.
+model RateLimitBucket {
+  key     String   @id // e.g. "rl:login:203.0.113.7" or "lockout:ana@example.com"
+  count   Int
+  resetAt DateTime
+
+  @@index([resetAt])
+}

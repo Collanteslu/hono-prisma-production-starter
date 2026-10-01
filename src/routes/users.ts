@@ -16,6 +16,7 @@ import { buildPagination, errorResponse, successResponse } from "../lib/response
 import { requireAdmin } from "../middleware/auth.js";
 import {
   blockUserSchema,
+  changeRoleSchema,
   createUserSchema,
   detailQuerySchema,
   idParamSchema,
@@ -25,7 +26,7 @@ import {
 } from "../schemas/index.js";
 import { successSchema, userSchema } from "../schemas/responses.js";
 import { revokeUserSessions, userSessionRevocationOps } from "../services/sessions.js";
-import { hashPassword } from "../utils/password.js";
+import { comparePassword, hashPassword } from "../utils/password.js";
 
 const router = createRouter();
 
@@ -41,9 +42,12 @@ const USER_INCLUDES = {
  * Returns true when the given user is the only remaining active administrator.
  * Used to prevent locking everyone out of the admin API.
  */
-async function isLastActiveAdmin(user: { id: string; role: string }) {
+async function isLastActiveAdmin(
+  db: Pick<typeof prisma, "user">,
+  user: { id: string; role: string },
+) {
   if (user.role !== "admin") return false;
-  const otherActiveAdmins = await prisma.user.count({
+  const otherActiveAdmins = await db.user.count({
     where: { role: "admin", isBlocked: false, deletedAt: null, id: { not: user.id } },
   });
   return otherActiveAdmins === 0;
@@ -112,6 +116,27 @@ const blockRoute = createRoute({
       ...adminErrors,
       404: "Usuario no encontrado",
       409: "Una cuenta eliminada no puede reactivarse",
+    }),
+  },
+});
+
+const roleRoute = createRoute({
+  method: "patch",
+  path: "/{id}/role",
+  tags: ["Users"],
+  summary: "Cambiar el rol de un usuario (Solo Admin)",
+  description:
+    "Asciende a admin o degrada a usuario. Un admin no puede cambiar su propio rol y nunca puede quedarse el sistema sin un administrador activo. El rol se lee de la base de datos en cada petición, por lo que el cambio es inmediato.",
+  security: secured,
+  middleware: [requireAdmin] as const,
+  request: { params: idParamSchema, ...jsonBody(changeRoleSchema) },
+  responses: {
+    200: jsonResponse(successSchema(userSchema), "Rol actualizado"),
+    ...errorResponses({
+      400: "Error de validación o intento de cambiar el propio rol",
+      ...adminErrors,
+      404: "Usuario no encontrado",
+      409: "Es el último administrador activo",
     }),
   },
 });
@@ -313,19 +338,32 @@ export const userRoutes = router
       return errorResponse(c, "Invalid action: Deleted accounts cannot be reactivated.", 409);
     }
 
-    const update = prisma.user.update({
-      where: { id },
-      data: {
-        isBlocked,
-        blockedReason: isBlocked ? reason || "Suspended by administrator" : null,
-      },
+    // Block + session revocation are atomic, and the last-admin check shares the transaction so two
+    // admins suspending each other at the same time cannot both succeed.
+    const blocked = await prisma.$transaction(async (tx) => {
+      if (isBlocked && (await isLastActiveAdmin(tx, targetUser))) return null;
+
+      const user = await tx.user.update({
+        where: { id },
+        data: {
+          isBlocked,
+          blockedReason: isBlocked ? reason || "Suspended by administrator" : null,
+        },
+      });
+      if (!isBlocked) return { user, revokedSessionsCount: 0 };
+
+      const revoked = await tx.session.updateMany({
+        where: { userId: id, isActive: true },
+        data: { isActive: false },
+      });
+      await tx.refreshToken.deleteMany({ where: { userId: id } });
+      return { user, revokedSessionsCount: revoked.count };
     });
 
-    // Terminate all active sessions immediately upon suspension (atomically with the block)
-    const [updatedUser, revokedSessions] = isBlocked
-      ? await prisma.$transaction([update, ...userSessionRevocationOps(id)])
-      : [await update, { count: 0 }];
-    const revokedSessionsCount = revokedSessions.count;
+    if (!blocked) {
+      return errorResponse(c, "Invalid action: Cannot suspend the last active administrator.", 409);
+    }
+    const { user: updatedUser, revokedSessionsCount } = blocked;
 
     await recordAudit(c, {
       userId: currentUser.userId,
@@ -339,6 +377,45 @@ export const userRoutes = router
       message: isBlocked
         ? `User '${updatedUser.name}' has been suspended and ${revokedSessionsCount} active session(s) terminated.`
         : `User '${updatedUser.name}' has been reactivated successfully.`,
+    });
+  })
+  /**
+   * PATCH /api/users/:id/role
+   * Promotes or demotes a user (Admin only). The last active administrator can never be demoted.
+   */
+  .openapi(roleRoute, async (c) => {
+    const { id } = c.req.valid("param");
+    const { role } = c.req.valid("json");
+    const currentUser = c.get("user");
+
+    if (currentUser.userId === id) {
+      return errorResponse(c, "Invalid action: Administrators cannot change their own role.", 400);
+    }
+
+    const targetUser = await prisma.user.findUnique({ where: { id } });
+    if (!targetUser || targetUser.deletedAt) {
+      return errorResponse(c, `User with ID '${id}' not found.`, 404);
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+      if (role !== "admin" && (await isLastActiveAdmin(tx, targetUser))) return null;
+      return tx.user.update({ where: { id }, data: { role } });
+    });
+
+    if (!result) {
+      return errorResponse(c, "Invalid action: Cannot demote the last active administrator.", 409);
+    }
+
+    await recordAudit(c, {
+      userId: currentUser.userId,
+      action: "ROLE_CHANGE",
+      entity: "User",
+      entityId: id,
+      details: { from: targetUser.role, to: role },
+    });
+
+    return successResponse(c, result, {
+      message: `User '${result.name}' is now ${role === "admin" ? "an administrator" : "a standard user"}.`,
     });
   })
   /**
@@ -388,14 +465,28 @@ export const userRoutes = router
       );
     }
 
+    const changes = c.req.valid("json");
+    const { name, email, password, currentPassword } = changes;
+
     const existingUser = await prisma.user.findUnique({ where: { id } });
 
     if (!existingUser || existingUser.deletedAt) {
       return errorResponse(c, `User with ID '${id}' not found.`, 404);
     }
 
-    const changes = c.req.valid("json");
-    const { name, email, password } = changes;
+    // A stolen access token must not be enough to take over the account: changing your own
+    // password requires proving you know the current one (admins resetting others are exempt).
+    if (password && currentUser.userId === id) {
+      const stored = await prisma.user.findUnique({
+        where: { id },
+        omit: { password: false },
+      });
+      const valid =
+        !!currentPassword && !!stored && (await comparePassword(currentPassword, stored.password));
+      if (!valid) {
+        return errorResponse(c, "Current password is missing or incorrect.", 403);
+      }
+    }
 
     if (email && email !== existingUser.email) {
       const emailTaken = await prisma.user.findUnique({ where: { email }, select: { id: true } });
@@ -404,7 +495,7 @@ export const userRoutes = router
       }
     }
 
-    const updatedUser = await prisma.user.update({
+    const updateOp = prisma.user.update({
       where: { id },
       data: {
         ...(name && { name }),
@@ -413,12 +504,22 @@ export const userRoutes = router
       },
     });
 
-    // A password change invalidates every other session (keep the caller's own session alive)
-    const revokedSessionsCount = password
-      ? await revokeUserSessions(id, {
+    // A password change invalidates every other session (keep the caller's own session alive).
+    // Both happen in one transaction: the new password never lands without the revocation.
+    let updatedUser: Awaited<typeof updateOp>;
+    let revokedSessionsCount = 0;
+    if (password) {
+      const [user, revoked] = await prisma.$transaction([
+        updateOp,
+        ...userSessionRevocationOps(id, {
           exceptSessionId: currentUser.userId === id ? currentUser.sessionId : undefined,
-        })
-      : 0;
+        }),
+      ]);
+      updatedUser = user;
+      revokedSessionsCount = revoked.count;
+    } else {
+      updatedUser = await updateOp;
+    }
 
     await recordAudit(c, {
       userId: currentUser.userId,
@@ -458,15 +559,36 @@ export const userRoutes = router
       return errorResponse(c, `User with ID '${id}' not found.`, 404);
     }
 
-    if (!existingUser.deletedAt && (await isLastActiveAdmin(existingUser))) {
+    // The "last admin" check and the delete/soft-delete run in one transaction, so two concurrent
+    // removals of the last two admins cannot both pass the check.
+    const outcome = await prisma.$transaction(async (tx) => {
+      if (!existingUser.deletedAt && (await isLastActiveAdmin(tx, existingUser))) {
+        return { lastAdmin: true as const };
+      }
+
+      if (isPermanent) {
+        const tasksCount = await tx.task.count({ where: { userId: id } });
+        await tx.user.delete({ where: { id } });
+        return { lastAdmin: false as const, tasksCount };
+      }
+
+      const softDeletedUser = await tx.user.update({
+        where: { id },
+        data: { deletedAt: new Date(), isBlocked: true, blockedReason: "Account deleted" },
+      });
+      await tx.session.updateMany({
+        where: { userId: id, isActive: true },
+        data: { isActive: false },
+      });
+      await tx.refreshToken.deleteMany({ where: { userId: id } });
+      return { lastAdmin: false as const, softDeletedUser };
+    });
+
+    if (outcome.lastAdmin) {
       return errorResponse(c, "Invalid action: Cannot delete the last active administrator.", 409);
     }
 
-    if (isPermanent) {
-      const tasksCount = await prisma.task.count({ where: { userId: id } });
-
-      await prisma.user.delete({ where: { id } });
-
+    if ("tasksCount" in outcome) {
       await recordAudit(c, {
         userId: currentUser.userId === id ? null : currentUser.userId,
         action: "DELETE_PERMANENT",
@@ -476,18 +598,11 @@ export const userRoutes = router
       });
 
       return successResponse(c, existingUser, {
-        message: `User '${existingUser.name}' and ${tasksCount} associated task(s) permanently deleted.`,
+        message: `User '${existingUser.name}' and ${outcome.tasksCount} associated task(s) permanently deleted.`,
       });
     }
 
-    // Soft delete user and revoke all active sessions and refresh tokens
-    const [softDeletedUser] = await prisma.$transaction([
-      prisma.user.update({
-        where: { id },
-        data: { deletedAt: new Date(), isBlocked: true, blockedReason: "Account deleted" },
-      }),
-      ...userSessionRevocationOps(id),
-    ]);
+    const { softDeletedUser } = outcome;
 
     await recordAudit(c, {
       userId: currentUser.userId,

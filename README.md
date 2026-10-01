@@ -52,7 +52,7 @@ This template gives you an **opinionated, robust, production-grade foundation**:
 hono-prisma-production-starter/
 ├── .env.example                      # Environment template (secrets intentionally blank)
 ├── .github/
-│   ├── workflows/ci.yml              # CI: audit, migration drift, typecheck, build, lint, tests + coverage
+│   ├── workflows/ci.yml              # CI: audit, migration drift, typecheck, build, lint, tests + coverage, Docker image build
 │   ├── ISSUE_TEMPLATE/               # Bug report & feature request forms
 │   └── PULL_REQUEST_TEMPLATE.md      # Standard PR checklist
 ├── .agents/skills/                   # Runbooks for AI assistants and contributors
@@ -87,7 +87,7 @@ hono-prisma-production-starter/
 │   │   └── version.ts                # API_VERSION constant
 │   ├── middleware/
 │   │   ├── auth.ts                   # Stateful auth (role/block/session read from DB) + requireAdmin
-│   │   ├── rateLimit.ts              # Per-IP rate limiter and per-account login lockout
+│   │   ├── rateLimit.ts              # Per-IP rate limiter and per-account login lockout (DB-backed counters)
 │   │   └── requestId.ts              # X-Request-Id / timing headers
 │   ├── routes/                       # auth, sessions, users, tasks, audit (createRoute + router.openapi)
 │   ├── schemas/
@@ -205,7 +205,7 @@ Some things to know before running requests:
 
 | Request | Needs |
 |---|---|
-| `Users/List Users`, `Create User`, `Block User`, `Unblock User`, `Get User By ID` (uses `user-1`), `Audit/*` | **Login Admin** |
+| `Users/List Users`, `Create User`, `Block User`, `Unblock User`, `Change User Role`, `Get User By ID` (uses `user-1`), `Audit/*` | **Login Admin** |
 | `Tasks/Get Task By ID`, `Update Task`, `Delete Task`, `Restore Task` | `task-1` belongs to the admin → **Login Admin** (with Login User use `task-3`) |
 | `Tasks/Restore Task` | Run `Delete Task` first (without `permanent`) |
 | `Sessions/Revoke Session`, `Revoke All Sessions`, `Auth/Logout` | End the current session: log in again afterwards |
@@ -248,12 +248,15 @@ sequenceDiagram
 - **Refresh token rotation with reuse detection**: each refresh token can be exchanged exactly once (atomic claim). Replaying a rotated token within `REFRESH_REUSE_GRACE_SECONDS` (default 10s) returns `409` (benign concurrent refresh); after that it is treated as theft and the whole session is revoked.
 - **Hashed refresh tokens**: only SHA-256 digests are persisted, so a database leak does not expose usable tokens.
 - **Real-time authorization**: blocking, soft-deleting, role changes and session revocation take effect on the very next request (role is read from the database, not from the JWT).
-- **Brute-force protection**: per-IP rate limits on `/login`, `/refresh` and `/register`, plus a per-account lockout after 5 failed logins (15 min). Limits are in-memory (per instance). Note the lockout is keyed by email, so someone can deliberately lock a known address for 15 minutes; this is the usual trade-off against credential stuffing.
+- **Brute-force protection**: per-IP rate limits on `/login`, `/refresh` and `/register`, plus a per-account lockout after 5 failed logins (15 min). Counters are stored in the database (`RateLimitBucket`), so limits hold across every instance sharing it (e.g. Turso) and survive restarts; a broken counter store fails open and is logged. The lockout is keyed by email, so someone can deliberately lock a known address (`LOGIN_LOCKOUT_MAX_FAILURES` / `LOGIN_LOCKOUT_MINUTES` tune it); this is the usual trade-off against credential stuffing.
 - **Trusted client IP**: `X-Forwarded-For` is only honoured when `TRUST_PROXY=true`, and it is read **from the right** (`TRUST_PROXY_HOPS` trusted proxies, default 1) because the leftmost entries are client-controlled. `CF-Connecting-IP` and `X-Real-IP` are ignored, since clients can set them and many proxies forward them untouched. Used for sessions, the audit log and rate limiting.
-- **Password policy**: 8–72 characters (bcrypt cost 12). Changing a password revokes every other session of the account.
+- **Password policy**: 8–72 characters and at most 72 UTF-8 bytes (bcrypt cost 12). Changing your own password requires `currentPassword`; the update and the revocation of every other session run in one transaction. Admins can reset another user's password without it.
+- **Absolute sessions**: a session lasts 7 days from login; rotated refresh tokens are capped to that expiry, so users must log in again after day 7.
 - **Startup guards**: the app refuses to boot without `JWT_SECRET` / `JWT_REFRESH_SECRET`, and in production requires both to be at least 32 characters and different from each other. `.env.example` ships with blank secrets on purpose.
 - **Admin safety**: the last active administrator cannot delete their account; deleted accounts cannot be reactivated.
-- **Audit trail**: logins (successful and failed), logout, registration, user creation, block/unblock, password changes, session revocations, token reuse and task changes.
+- **No existence oracle**: a task or session that belongs to someone else answers 404, exactly like a missing one.
+- **Audit trail**: logins (successful and failed), logout, registration, user creation, block/unblock, role changes, password changes, session revocations, token reuse and task changes. Entries older than `AUDIT_RETENTION_DAYS` (default 90, `0` keeps everything) are purged by the cleanup job.
+- **Roles**: `PATCH /api/users/:id/role` promotes or demotes; the system can never be left without an active administrator (delete, suspend and demote are all checked inside a transaction).
 
 ### Pre-seeded Demo Credentials
 
@@ -397,7 +400,7 @@ Most errors also carry `meta`. A few are produced by infrastructure middleware a
 | Method | Endpoint | Description | Auth |
 |---|---|---|---|
 | `GET` | `/api/tasks` | Paginated list (`?page=1&limit=10&search=text&completed=true&include=user&includeDeleted=true&sort=-createdAt,title&filter[completed]=true`) | Bearer |
-| `GET` | `/api/tasks/:id` | Get single task (`?include=user`, `?includeDeleted=true` for soft-deleted, 403 if belonging to another user) | Bearer |
+| `GET` | `/api/tasks/:id` | Get single task (`?include=user`, `?includeDeleted=true` for soft-deleted; 404 if missing or belonging to another user) | Bearer |
 | `POST` | `/api/tasks` | Create task (automatically assigned to token's userId, generates AuditLog) | Bearer |
 | `PUT` | `/api/tasks/:id` | Update title, description, or completed state (generates AuditLog) | Bearer |
 | `DELETE` | `/api/tasks/:id` | **Soft-delete** task (`deletedAt: now()`). Add `?permanent=true` for physical delete | Bearer |
@@ -409,7 +412,8 @@ Most errors also carry `meta`. A few are produced by infrastructure middleware a
 | `GET` | `/api/users` | Paginated users list (`?page=1&limit=10&search=ana&role=user&include=tasks,sessions&includeDeleted=true&sort=-createdAt,name&filter[role]=user`) | Admin |
 | `GET` | `/api/users/:id` | Get user details (`?include=tasks,sessions`); Admin, or the user themselves | Bearer |
 | `POST` | `/api/users` | Create user with any role (public sign-up lives at `/api/auth/register`) | Admin |
-| `PUT` | `/api/users/:id` | Update own user profile (or any profile if Admin). A password change revokes other sessions | Bearer |
+| `PUT` | `/api/users/:id` | Update own user profile (or any profile if Admin). Own password change needs `currentPassword` and revokes other sessions | Bearer |
+| `PATCH` | `/api/users/:id/role` | **Promote / demote** *(Admin only)*: cannot change your own role or demote the last active admin | Admin |
 | `PATCH` | `/api/users/:id/block` | **Suspend / Reactivate User** *(Admin only)*: Immediately revokes all active sessions | Admin |
 | `POST` | `/api/users/:id/revoke-sessions` | Terminate all active sessions for a target user (self or Admin) | Bearer |
 | `DELETE` | `/api/users/:id` | Delete own account (or any if Admin). **Soft-delete** by default, `?permanent=true` for cascade | Bearer |
@@ -499,9 +503,11 @@ All settings are environment variables, validated at startup (the process exits 
 | `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` | — | Use a remote Turso/libSQL database instead of the local file |
 | `TRUST_PROXY` | `false` | Trust `X-Forwarded-For` for client IPs (enable only behind a trusted reverse proxy that appends to it, e.g. Traefik or Nginx) |
 | `TRUST_PROXY_HOPS` | `1` | Number of trusted proxies in front of the API (`2` for e.g. Cloudflare + Traefik). Without a proxy header of that depth the socket address is used |
-| `CORS_ORIGINS` | `*` | Comma-separated allowed origins |
+| `CORS_ORIGINS` | `*` outside production, none in production | Comma-separated allowed origins. In production you must list your frontends (or set `*` explicitly) |
 | `ENABLE_DOCS` | `true` outside production | Expose `/docs` and `/openapi.json` |
 | `LOGIN_RATE_LIMIT_MAX` / `REFRESH_RATE_LIMIT_MAX` / `REGISTER_RATE_LIMIT_MAX` | `10` / `30` / `5` | Per-IP limits (login and refresh per minute; register per hour) |
+| `LOGIN_LOCKOUT_MAX_FAILURES` / `LOGIN_LOCKOUT_MINUTES` | `5` / `15` | Failed passwords before an account is locked, and for how long |
+| `AUDIT_RETENTION_DAYS` | `90` | Days to keep audit entries (`0` = forever) |
 | `REFRESH_REUSE_GRACE_SECONDS` | `10` | Window in which reusing a just-rotated refresh token is treated as a concurrent refresh instead of theft |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | — | Bootstrap the first admin in production on an empty database (password 8–72 chars) |
 | `LOG_LEVEL` | `info` in production, `debug` otherwise | Pino log level (`trace` … `fatal`, `silent`) |

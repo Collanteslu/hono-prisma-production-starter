@@ -21,5 +21,5 @@ body:json {
 }
 
 docs {
-  Admin o el propio usuario. Cambiar la contraseña cierra el resto de sesiones de la cuenta.
+  Admin o el propio usuario. Cambiar la propia contraseña exige `currentPassword` (un admin que restablece la de otro usuario no la necesita) y cierra el resto de sesiones de la cuenta en la misma transacción.
 }
