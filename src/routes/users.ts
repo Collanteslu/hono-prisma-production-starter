@@ -16,6 +16,7 @@ import { buildPagination, errorResponse, successResponse } from "../lib/response
 import { requireAdmin } from "../middleware/auth.js";
 import {
   blockUserSchema,
+  changeRoleSchema,
   createUserSchema,
   detailQuerySchema,
   idParamSchema,
@@ -115,6 +116,27 @@ const blockRoute = createRoute({
       ...adminErrors,
       404: "Usuario no encontrado",
       409: "Una cuenta eliminada no puede reactivarse",
+    }),
+  },
+});
+
+const roleRoute = createRoute({
+  method: "patch",
+  path: "/{id}/role",
+  tags: ["Users"],
+  summary: "Cambiar el rol de un usuario (Solo Admin)",
+  description:
+    "Asciende a admin o degrada a usuario. Un admin no puede cambiar su propio rol y nunca puede quedarse el sistema sin un administrador activo. El rol se lee de la base de datos en cada petición, por lo que el cambio es inmediato.",
+  security: secured,
+  middleware: [requireAdmin] as const,
+  request: { params: idParamSchema, ...jsonBody(changeRoleSchema) },
+  responses: {
+    200: jsonResponse(successSchema(userSchema), "Rol actualizado"),
+    ...errorResponses({
+      400: "Error de validación o intento de cambiar el propio rol",
+      ...adminErrors,
+      404: "Usuario no encontrado",
+      409: "Es el último administrador activo",
     }),
   },
 });
@@ -316,19 +338,32 @@ export const userRoutes = router
       return errorResponse(c, "Invalid action: Deleted accounts cannot be reactivated.", 409);
     }
 
-    const update = prisma.user.update({
-      where: { id },
-      data: {
-        isBlocked,
-        blockedReason: isBlocked ? reason || "Suspended by administrator" : null,
-      },
+    // Block + session revocation are atomic, and the last-admin check shares the transaction so two
+    // admins suspending each other at the same time cannot both succeed.
+    const blocked = await prisma.$transaction(async (tx) => {
+      if (isBlocked && (await isLastActiveAdmin(tx, targetUser))) return null;
+
+      const user = await tx.user.update({
+        where: { id },
+        data: {
+          isBlocked,
+          blockedReason: isBlocked ? reason || "Suspended by administrator" : null,
+        },
+      });
+      if (!isBlocked) return { user, revokedSessionsCount: 0 };
+
+      const revoked = await tx.session.updateMany({
+        where: { userId: id, isActive: true },
+        data: { isActive: false },
+      });
+      await tx.refreshToken.deleteMany({ where: { userId: id } });
+      return { user, revokedSessionsCount: revoked.count };
     });
 
-    // Terminate all active sessions immediately upon suspension (atomically with the block)
-    const [updatedUser, revokedSessions] = isBlocked
-      ? await prisma.$transaction([update, ...userSessionRevocationOps(id)])
-      : [await update, { count: 0 }];
-    const revokedSessionsCount = revokedSessions.count;
+    if (!blocked) {
+      return errorResponse(c, "Invalid action: Cannot suspend the last active administrator.", 409);
+    }
+    const { user: updatedUser, revokedSessionsCount } = blocked;
 
     await recordAudit(c, {
       userId: currentUser.userId,
@@ -342,6 +377,45 @@ export const userRoutes = router
       message: isBlocked
         ? `User '${updatedUser.name}' has been suspended and ${revokedSessionsCount} active session(s) terminated.`
         : `User '${updatedUser.name}' has been reactivated successfully.`,
+    });
+  })
+  /**
+   * PATCH /api/users/:id/role
+   * Promotes or demotes a user (Admin only). The last active administrator can never be demoted.
+   */
+  .openapi(roleRoute, async (c) => {
+    const { id } = c.req.valid("param");
+    const { role } = c.req.valid("json");
+    const currentUser = c.get("user");
+
+    if (currentUser.userId === id) {
+      return errorResponse(c, "Invalid action: Administrators cannot change their own role.", 400);
+    }
+
+    const targetUser = await prisma.user.findUnique({ where: { id } });
+    if (!targetUser || targetUser.deletedAt) {
+      return errorResponse(c, `User with ID '${id}' not found.`, 404);
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+      if (role !== "admin" && (await isLastActiveAdmin(tx, targetUser))) return null;
+      return tx.user.update({ where: { id }, data: { role } });
+    });
+
+    if (!result) {
+      return errorResponse(c, "Invalid action: Cannot demote the last active administrator.", 409);
+    }
+
+    await recordAudit(c, {
+      userId: currentUser.userId,
+      action: "ROLE_CHANGE",
+      entity: "User",
+      entityId: id,
+      details: { from: targetUser.role, to: role },
+    });
+
+    return successResponse(c, result, {
+      message: `User '${result.name}' is now ${role === "admin" ? "an administrator" : "a standard user"}.`,
     });
   })
   /**

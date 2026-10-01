@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { describe, expect, it, vi } from "vitest";
@@ -65,7 +66,7 @@ describe("parseSorting", () => {
 describe("rateLimiter", () => {
   it("returns 429 with Retry-After once the limit is exceeded", async () => {
     const app = new Hono();
-    app.use("*", rateLimiter(60_000, 2));
+    app.use("*", rateLimiter(`unit-${randomUUID()}`, 60_000, 2));
     app.get("/", (c) => c.text("ok"));
 
     const first = await app.request("/");
@@ -82,14 +83,15 @@ describe("rateLimiter", () => {
 });
 
 describe("createLoginLockout", () => {
-  it("locks after the maximum number of failures and resets on success", () => {
+  it("locks after the maximum number of failures and resets on success", async () => {
     const lockout = createLoginLockout(2, 60_000);
-    lockout.recordFailure("a@example.com");
-    expect(lockout.retryAfterSeconds("a@example.com")).toBe(0);
-    lockout.recordFailure("a@example.com");
-    expect(lockout.retryAfterSeconds("a@example.com")).toBeGreaterThan(0);
-    lockout.reset("a@example.com");
-    expect(lockout.retryAfterSeconds("a@example.com")).toBe(0);
+    const account = `${randomUUID()}@example.com`;
+    await lockout.recordFailure(account);
+    expect(await lockout.retryAfterSeconds(account)).toBe(0);
+    await lockout.recordFailure(account);
+    expect(await lockout.retryAfterSeconds(account)).toBeGreaterThan(0);
+    await lockout.reset(account);
+    expect(await lockout.retryAfterSeconds(account)).toBe(0);
   });
 });
 

@@ -207,7 +207,7 @@ describe("Tasks soft delete & restore", () => {
       method: "POST",
       headers: bearer(intruder.accessToken),
     });
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(404);
   });
 });
 

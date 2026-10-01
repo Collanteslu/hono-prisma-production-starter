@@ -1,64 +1,44 @@
 /**
  * @file rateLimit.ts
- * @description In-memory rate limiter middleware designed to protect sensitive endpoints
- * (e.g. login, token refresh, registration) against brute-force and Denial-of-Service attacks.
+ * @description Rate limiter and login lockout protecting sensitive endpoints (login, token refresh,
+ * registration) against brute force and denial of service.
  *
- * Note: counters live in process memory, so limits apply per instance. Use a shared store
- * (e.g. Redis) if the API is ever scaled horizontally.
+ * Counters live in the database (see lib/rateLimitStore.ts), not in process memory, so limits are
+ * shared by every instance that uses the same database.
  */
 
 import type { Context, Next } from "hono";
 import { getClientIp } from "../lib/clientIp.js";
-
-interface RateLimitRecord {
-  count: number;
-  resetAt: number;
-}
+import { logger } from "../lib/logger.js";
+import { clearBucket, hitBucket, peekBucket } from "../lib/rateLimitStore.js";
 
 /**
  * Creates an IP-based rate limiting middleware.
+ * @param name Stable identifier of this limiter (part of the shared counter key)
  * @param windowMs Time window in milliseconds (e.g., 60,000 for 1 minute)
  * @param maxRequests Maximum allowable requests within the time window
  */
-export function rateLimiter(windowMs: number = 60_000, maxRequests: number = 10) {
-  const ipStore = new Map<string, RateLimitRecord>();
-
-  // Periodically clean up expired IP records to prevent memory leak
-  const interval = setInterval(() => {
-    const now = Date.now();
-    for (const [ip, record] of ipStore.entries()) {
-      if (now > record.resetAt) {
-        ipStore.delete(ip);
-      }
-    }
-  }, windowMs);
-  interval.unref?.();
-
+export function rateLimiter(name: string, windowMs: number = 60_000, maxRequests: number = 10) {
   return async (c: Context, next: Next) => {
     // Proxy headers are only honoured when TRUST_PROXY is enabled (see getClientIp)
     const ip = getClientIp(c) || "127.0.0.1";
 
-    const now = Date.now();
-    const clientRecord = ipStore.get(ip);
-
-    // Initial request or window expired
-    if (!clientRecord || now > clientRecord.resetAt) {
-      ipStore.set(ip, {
-        count: 1,
-        resetAt: now + windowMs,
-      });
-      c.header("X-RateLimit-Limit", maxRequests.toString());
-      c.header("X-RateLimit-Remaining", (maxRequests - 1).toString());
+    let bucket: Awaited<ReturnType<typeof hitBucket>>;
+    try {
+      bucket = await hitBucket(`rl:${name}:${ip}`, windowMs);
+    } catch (error) {
+      // A broken counter store must not take the API down: fail open and make noise
+      logger.error({ err: error }, "Rate limit store unavailable, allowing request");
       await next();
       return;
     }
 
-    // Rate limit exceeded
-    if (clientRecord.count >= maxRequests) {
-      const retryAfterSec = Math.ceil((clientRecord.resetAt - now) / 1000);
+    c.header("X-RateLimit-Limit", maxRequests.toString());
+    c.header("X-RateLimit-Remaining", Math.max(0, maxRequests - bucket.count).toString());
+
+    if (bucket.count > maxRequests) {
+      const retryAfterSec = Math.max(1, Math.ceil((bucket.resetAt.getTime() - Date.now()) / 1000));
       c.header("Retry-After", retryAfterSec.toString());
-      c.header("X-RateLimit-Limit", maxRequests.toString());
-      c.header("X-RateLimit-Remaining", "0");
 
       return c.json(
         {
@@ -70,11 +50,6 @@ export function rateLimiter(windowMs: number = 60_000, maxRequests: number = 10)
       );
     }
 
-    // Increment request count within active window
-    clientRecord.count++;
-    c.header("X-RateLimit-Limit", maxRequests.toString());
-    c.header("X-RateLimit-Remaining", (maxRequests - clientRecord.count).toString());
-
     await next();
   };
 }
@@ -82,36 +57,25 @@ export function rateLimiter(windowMs: number = 60_000, maxRequests: number = 10)
 /**
  * Tracks failed login attempts per account to lock out credential stuffing
  * that rotates source IPs. Successful logins clear the counter.
+ *
+ * Trade-off: because the key is the account, someone who knows an email can keep it locked for
+ * `lockoutMs`. Tune the threshold and duration (LOGIN_LOCKOUT_*) to your risk.
  */
 export function createLoginLockout(maxFailures = 5, lockoutMs = 15 * 60_000) {
-  const failures = new Map<string, RateLimitRecord>();
-
-  const interval = setInterval(() => {
-    const now = Date.now();
-    for (const [key, record] of failures.entries()) {
-      if (now > record.resetAt) failures.delete(key);
-    }
-  }, lockoutMs);
-  interval.unref?.();
+  const keyOf = (account: string) => `lockout:${account}`;
 
   return {
     /** Seconds until the account unlocks, or 0 if login attempts are allowed */
-    retryAfterSeconds(key: string): number {
-      const record = failures.get(key);
-      if (!record || Date.now() > record.resetAt || record.count < maxFailures) return 0;
-      return Math.ceil((record.resetAt - Date.now()) / 1000);
+    async retryAfterSeconds(account: string): Promise<number> {
+      const bucket = await peekBucket(keyOf(account));
+      if (!bucket || bucket.count < maxFailures) return 0;
+      return Math.max(1, Math.ceil((bucket.resetAt.getTime() - Date.now()) / 1000));
     },
-    recordFailure(key: string) {
-      const now = Date.now();
-      const record = failures.get(key);
-      if (!record || now > record.resetAt) {
-        failures.set(key, { count: 1, resetAt: now + lockoutMs });
-      } else {
-        record.count++;
-      }
+    async recordFailure(account: string): Promise<void> {
+      await hitBucket(keyOf(account), lockoutMs);
     },
-    reset(key: string) {
-      failures.delete(key);
+    async reset(account: string): Promise<void> {
+      await clearBucket(keyOf(account));
     },
   };
 }

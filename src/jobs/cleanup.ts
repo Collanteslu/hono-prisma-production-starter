@@ -4,8 +4,10 @@
  * Keeps the SQLite database performant and prevents storage bloat.
  */
 
+import { env } from "../config/env.js";
 import { prisma } from "../db.js";
 import { logger } from "../lib/logger.js";
+import { purgeExpiredBuckets } from "../lib/rateLimitStore.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -16,6 +18,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 export async function cleanupExpiredSessions(): Promise<{
   deletedSessions: number;
   deletedTokens: number;
+  deletedBuckets: number;
+  deletedAuditLogs: number;
 }> {
   try {
     const now = new Date();
@@ -43,20 +47,40 @@ export async function cleanupExpiredSessions(): Promise<{
       }),
     ]);
 
-    if (sessionsRes.count > 0 || tokensRes.count > 0) {
+    // 3. Purge ended rate-limit windows and audit entries past the retention period
+    const deletedBuckets = await purgeExpiredBuckets();
+    const deletedAuditLogs =
+      env.AUDIT_RETENTION_DAYS > 0
+        ? (
+            await prisma.auditLog.deleteMany({
+              where: {
+                createdAt: { lt: new Date(now.getTime() - env.AUDIT_RETENTION_DAYS * DAY_MS) },
+              },
+            })
+          ).count
+        : 0;
+
+    if (sessionsRes.count > 0 || tokensRes.count > 0 || deletedAuditLogs > 0) {
       logger.info(
-        { deletedSessions: sessionsRes.count, deletedTokens: tokensRes.count },
-        "🧹 Cleanup routine purged expired sessions and tokens",
+        {
+          deletedSessions: sessionsRes.count,
+          deletedTokens: tokensRes.count,
+          deletedBuckets,
+          deletedAuditLogs,
+        },
+        "🧹 Cleanup routine purged expired sessions, tokens and old audit entries",
       );
     }
 
     return {
       deletedSessions: sessionsRes.count,
       deletedTokens: tokensRes.count,
+      deletedBuckets,
+      deletedAuditLogs,
     };
   } catch (error) {
     logger.error({ err: error }, "❌ Error during session cleanup routine");
-    return { deletedSessions: 0, deletedTokens: 0 };
+    return { deletedSessions: 0, deletedTokens: 0, deletedBuckets: 0, deletedAuditLogs: 0 };
   }
 }
 

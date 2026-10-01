@@ -91,6 +91,15 @@ export const blockUserSchema = z
   .openapi("BlockUserRequest");
 
 /**
+ * Esquema para cambiar el rol de un usuario.
+ */
+export const changeRoleSchema = z
+  .object({
+    role: z.enum(["admin", "user"]).openapi({ example: "admin" }),
+  })
+  .openapi("ChangeRoleRequest");
+
+/**
  * Esquema para crear un nuevo usuario.
  */
 export const createUserSchema = z

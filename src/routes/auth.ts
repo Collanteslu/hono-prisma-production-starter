@@ -32,12 +32,16 @@ import { comparePassword, getDummyHash, hashPassword } from "../utils/password.j
 const router = createRouter();
 
 // Per-IP rate limiting on sensitive endpoints
-router.use("/login", rateLimiter(60_000, env.LOGIN_RATE_LIMIT_MAX));
-router.use("/refresh", rateLimiter(60_000, env.REFRESH_RATE_LIMIT_MAX));
-router.use("/register", rateLimiter(60 * 60_000, env.REGISTER_RATE_LIMIT_MAX));
+router.use("/login", rateLimiter("login", 60_000, env.LOGIN_RATE_LIMIT_MAX));
+router.use("/refresh", rateLimiter("refresh", 60_000, env.REFRESH_RATE_LIMIT_MAX));
+router.use("/register", rateLimiter("register", 60 * 60_000, env.REGISTER_RATE_LIMIT_MAX));
 
-// Per-account lockout: 5 failed passwords lock the account for 15 minutes
-const loginLockout = createLoginLockout();
+// Per-account lockout (shared through the database): LOGIN_LOCKOUT_MAX_FAILURES failed passwords
+// lock the account for LOGIN_LOCKOUT_MINUTES
+const loginLockout = createLoginLockout(
+  env.LOGIN_LOCKOUT_MAX_FAILURES,
+  env.LOGIN_LOCKOUT_MINUTES * 60_000,
+);
 
 const registerRoute = createRoute({
   method: "post",
@@ -146,7 +150,7 @@ export const authRoutes = router
   .openapi(loginRoute, async (c) => {
     const { email, password } = c.req.valid("json");
 
-    const lockedForSeconds = loginLockout.retryAfterSeconds(email);
+    const lockedForSeconds = await loginLockout.retryAfterSeconds(email);
     if (lockedForSeconds > 0) {
       c.header("Retry-After", lockedForSeconds.toString());
       return errorResponse(
@@ -168,7 +172,7 @@ export const authRoutes = router
     );
 
     if (!user || !isValidPassword || user.deletedAt) {
-      loginLockout.recordFailure(email);
+      await loginLockout.recordFailure(email);
       await recordAudit(c, {
         userId: user?.id ?? null,
         action: "LOGIN_FAILED",
@@ -178,7 +182,7 @@ export const authRoutes = router
       return errorResponse(c, "Invalid credentials (incorrect email or password)", 401);
     }
 
-    loginLockout.reset(email);
+    await loginLockout.reset(email);
 
     // Verify account suspension status after password check to prevent status enumeration
     if (user.isBlocked) {

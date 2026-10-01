@@ -41,15 +41,16 @@ The reference implementations are `src/middleware/auth.ts`, `src/services/sessio
   const currentUser = c.get('user');
   const userId = currentUser.userId; // from the verified token + session
   ```
-- Any access to single resources (`/:id`) must verify `entity.userId === currentUser.userId` before reading, mutating, or deleting (403 if mismatched). See `findOwnedTask()` in `src/routes/tasks.ts`.
+- Any access to single resources (`/:id`) must verify `entity.userId === currentUser.userId` before reading, mutating, or deleting (answer **404**, never 403, if mismatched, so IDs cannot be probed). See `findOwnedTask()` in `src/routes/tasks.ts`.
 - When building `where` clauses from user-controlled filters, apply the ownership field **after** the filters so they can never override it.
 - Soft-deleted tasks are hidden (404) unless `?includeDeleted=true` is passed or they are restored; soft-deleted users cannot authenticate.
 
 ### 4. Brute-Force Protection
-- Per-IP `rateLimiter(windowMs, max)` on `/login` (10/min), `/refresh` (30/min) and `/register` (5/hour); all limits are configurable via env vars. Responses: `429` with `Retry-After` and `X-RateLimit-*`.
-- Per-account lockout (`createLoginLockout()`): 5 failed logins lock the email for 15 minutes.
+- Per-IP `rateLimiter(name, windowMs, max)` on `/login` (10/min), `/refresh` (30/min) and `/register` (5/hour); all limits are configurable via env vars. Responses: `429` with `Retry-After` and `X-RateLimit-*`.
+- Per-account lockout (`createLoginLockout()`): `LOGIN_LOCKOUT_MAX_FAILURES` failed logins lock the email for `LOGIN_LOCKOUT_MINUTES`.
 - Login always runs a bcrypt comparison (`getDummyHash()` for unknown emails) to avoid timing leaks, and returns the same 401 for unknown email and wrong password.
-- Rate limit state is in memory: it is per instance. Move it to a shared store before scaling horizontally.
+- Rate limit and lockout counters live in the database (`RateLimitBucket`, `src/lib/rateLimitStore.ts`), so they are shared by every instance using the same database. Give every limiter a stable, unique `name`.
+- Anything that can leave the system without an active admin (delete, suspend, demote) must run `isLastActiveAdmin(tx, user)` inside the same transaction as the write.
 
 ### 5. Client IP and Proxies
 - Always resolve the IP with `getClientIp(c)` (`src/lib/clientIp.ts`). `X-Forwarded-For` is trusted **only** when `TRUST_PROXY=true`, and read from the right (`TRUST_PROXY_HOPS` trusted proxies): the leftmost entries are client-controlled. `CF-Connecting-IP` and `X-Real-IP` are ignored on purpose (a client can set them and many proxies forward them untouched). Otherwise spoofed values would poison sessions, audit logs and rate limiting.
@@ -60,7 +61,7 @@ The reference implementations are `src/middleware/auth.ts`, `src/services/sessio
 - `JWT_SECRET` / `JWT_REFRESH_SECRET` have no defaults; in production they must be ≥ 32 characters and different (`src/config/env.ts`). Never commit real secrets (Compose reads them from the environment / `--env-file`), and never commit Bruno environment values or tokens.
 
 ### 7. Auditing
-- Record security-relevant events with `recordAudit()`: `LOGIN`, `LOGIN_FAILED`, `LOGOUT`, `REGISTER`, `CREATE`, `UPDATE`, `PASSWORD_CHANGE`, `SOFT_DELETE`, `RESTORE`, `DELETE_PERMANENT`, `BLOCK`, `UNBLOCK`, `REVOKE_SESSION`, `REVOKE_ALL_SESSIONS`, `TOKEN_REUSE_DETECTED`. It never throws, so it cannot break the user's request.
+- Record security-relevant events with `recordAudit()`: `LOGIN`, `LOGIN_FAILED`, `LOGOUT`, `REGISTER`, `CREATE`, `UPDATE`, `PASSWORD_CHANGE`, `ROLE_CHANGE`, `SOFT_DELETE`, `RESTORE`, `DELETE_PERMANENT`, `BLOCK`, `UNBLOCK`, `REVOKE_SESSION`, `REVOKE_ALL_SESSIONS`, `TOKEN_REUSE_DETECTED`. It never throws, so it cannot break the user's request.
 - Do not put secrets or tokens in `details`.
 
 ## Review Checklist
