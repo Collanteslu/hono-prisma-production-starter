@@ -9,11 +9,15 @@ export function bearer(token: string, extra: Record<string, string> = {}) {
   return { Authorization: `Bearer ${token}`, ...jsonHeaders, ...extra };
 }
 
-export async function login(email: string, password = "password123") {
+export async function login(
+  email: string,
+  password = "password123",
+  extra: Record<string, string> = {},
+) {
   const res = await app.request("/api/auth/login", {
     method: "POST",
     headers: jsonHeaders,
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ email, password, ...extra }),
   });
   if (res.status !== 200) throw new Error(`Login failed for ${email}: ${res.status}`);
   return (await res.json()) as {

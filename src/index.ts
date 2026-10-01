@@ -30,6 +30,8 @@ import { requestIdMiddleware } from "./middleware/requestId.js";
 import { auditRoutes } from "./routes/audit.js";
 // Route modules
 import { authRoutes } from "./routes/auth.js";
+import { mfaRoutes } from "./routes/mfa.js";
+import { recoveryRoutes } from "./routes/recovery.js";
 import { sessionRoutes } from "./routes/sessions.js";
 import { taskRoutes } from "./routes/tasks.js";
 import { userRoutes } from "./routes/users.js";
@@ -113,6 +115,7 @@ if (env.ENABLE_DOCS ?? env.NODE_ENV !== "production") {
     servers: [{ url: `http://localhost:${env.PORT}`, description: "Servidor local" }],
     tags: [
       { name: "Auth" },
+      { name: "MFA" },
       { name: "Sessions" },
       { name: "Users" },
       { name: "Tasks" },
@@ -228,6 +231,8 @@ for (const prefix of ["/api/sessions", "/api/users", "/api/tasks", "/api/audit-l
 // Public authentication routes and protected resource modules chained cleanly for Hono RPC
 const routes = app
   .route("/api/auth", authRoutes)
+  .route("/api/auth", recoveryRoutes)
+  .route("/api/auth", mfaRoutes)
   .route("/api/sessions", sessionRoutes)
   .route("/api/users", userRoutes)
   .route("/api/tasks", taskRoutes)

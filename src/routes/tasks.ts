@@ -64,12 +64,16 @@ const listRoute = createRoute({
   tags: ["Tasks"],
   summary: "Listar tareas del usuario",
   description:
-    "Lista paginada de las tareas del usuario autenticado. Admite filtros dinámicos tipados `filter[campo]` / `filter[campo][operador]` sobre `title`, `description`, `completed` y `createdAt` (operadores: `eq`, `contains`, `in`, `gte`, `lte` según el tipo); valores inválidos devuelven 400.",
+    "Lista paginada de las tareas del usuario autenticado (un Admin puede usar `userId=` o `scope=all` para ver las de otros; el resto recibe 403). Admite filtros dinámicos tipados `filter[campo]` / `filter[campo][operador]` sobre `title`, `description`, `completed` y `createdAt` (operadores: `eq`, `contains`, `in`, `gte`, `lte` según el tipo); valores inválidos devuelven 400.",
   security: secured,
   request: { query: taskQuerySchema },
   responses: {
     200: jsonResponse(successSchema(z.array(taskSchema)), "Lista paginada de tareas"),
-    ...errorResponses({ 400: "Parámetros o filtros inválidos", ...authErrors }),
+    ...errorResponses({
+      400: "Parámetros o filtros inválidos",
+      ...authErrors,
+      403: "`userId` o `scope=all` sin ser Admin",
+    }),
   },
 });
 
@@ -79,7 +83,7 @@ const getRoute = createRoute({
   tags: ["Tasks"],
   summary: "Obtener una tarea",
   description:
-    "Devuelve una tarea propia. Las tareas eliminadas (soft delete) solo se devuelven con `?includeDeleted=true`.",
+    "Devuelve una tarea propia (un Admin puede leer cualquiera). Las tareas eliminadas (soft delete) solo se devuelven con `?includeDeleted=true`.",
   security: secured,
   request: { params: idParamSchema, query: detailQuerySchema },
   responses: {
@@ -185,8 +189,17 @@ export const taskRoutes = router
       },
     });
 
-    // Strict ownership filter: Always scope to the token's authenticated userId
-    where.userId = currentUser.userId;
+    // Ownership filter: always the token's userId, except that admins may look at another user's
+    // tasks (?userId=) or at everyone's (?scope=all). Everyone else asking for that gets 403.
+    const { userId: requestedUserId, scope } = c.req.valid("query");
+    if (requestedUserId || scope === "all") {
+      if (currentUser.role !== "admin") {
+        return errorResponse(c, "Only administrators can list other users' tasks.", 403);
+      }
+      if (requestedUserId) where.userId = requestedUserId;
+    } else {
+      where.userId = currentUser.userId;
+    }
 
     // Soft delete filter: By default, exclude soft-deleted tasks unless explicitly requested
     if (includeDeleted !== "true") {
@@ -237,10 +250,12 @@ export const taskRoutes = router
     });
 
     // Missing, soft-deleted and foreign tasks all answer 404 (no existence oracle for other users' IDs)
+    // (administrators may read any task; writes stay owner-only)
+    const viewer = c.get("user");
     if (
       !task ||
       (task.deletedAt && includeDeleted !== "true") ||
-      task.userId !== c.get("user").userId
+      (task.userId !== viewer.userId && viewer.role !== "admin")
     ) {
       return errorResponse(c, `Task with ID '${id}' not found.`, 404);
     }

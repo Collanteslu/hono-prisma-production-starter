@@ -205,7 +205,7 @@ Some things to know before running requests:
 
 | Request | Needs |
 |---|---|
-| `Users/List Users`, `Create User`, `Block User`, `Unblock User`, `Change User Role`, `Get User By ID` (uses `user-1`), `Audit/*` | **Login Admin** |
+| `Users/List Users`, `Create User`, `Block User`, `Unblock User`, `Change User Role`, `Reset User MFA`, `Get User By ID` (uses `user-1`), `Audit/*` | **Login Admin** |
 | `Tasks/Get Task By ID`, `Update Task`, `Delete Task`, `Restore Task` | `task-1` belongs to the admin → **Login Admin** (with Login User use `task-3`) |
 | `Tasks/Restore Task` | Run `Delete Task` first (without `permanent`) |
 | `Sessions/Revoke Session`, `Revoke All Sessions`, `Auth/Logout` | End the current session: log in again afterwards |
@@ -254,8 +254,11 @@ sequenceDiagram
 - **Absolute sessions**: a session lasts 7 days from login; rotated refresh tokens are capped to that expiry, so users must log in again after day 7.
 - **Startup guards**: the app refuses to boot without `JWT_SECRET` / `JWT_REFRESH_SECRET`, and in production requires both to be at least 32 characters and different from each other. `.env.example` ships with blank secrets on purpose.
 - **Admin safety**: the last active administrator cannot delete their account; deleted accounts cannot be reactivated.
+- **Password recovery**: `POST /api/auth/forgot-password` always answers 202 (exists or not) and sends the email in the background, so neither the body nor the latency reveals which addresses are registered; at most 3 emails per address per hour. The emailed token is single-use, stored only as SHA-256 and expires after `PASSWORD_RESET_TTL_MINUTES`. Resetting revokes every session, lifts the login lockout and keeps 2FA enforced.
+- **Email verification**: registration (and any email change) sends a single-use link. Set `REQUIRE_EMAIL_VERIFICATION=true` to forbid login until it is used (needs `MAIL_TRANSPORT=smtp`). Existing accounts are grandfathered as verified by the migration. Changing your own email or password needs `currentPassword`, so a stolen access token cannot redirect password resets to an attacker's mailbox.
+- **Two-factor authentication (TOTP, RFC 6238)**: `POST /api/auth/mfa/setup` (needs the password) → scan the `otpauth://` URI → `POST /api/auth/mfa/enable` returns 10 one-time recovery codes and signs out other devices. Login then needs `totpCode` or `recoveryCode`. Codes cannot be replayed (the accepted time step is stored atomically), wrong codes count towards the lockout, secrets are AES-256-GCM encrypted at rest (`MFA_ENCRYPTION_KEY`, defaults to a key derived from `JWT_SECRET`) and recovery codes are stored hashed. An admin can reset a user who lost their device with `DELETE /api/users/:id/mfa`.
 - **No existence oracle**: a task or session that belongs to someone else answers 404, exactly like a missing one.
-- **Audit trail**: logins (successful and failed), logout, registration, user creation, block/unblock, role changes, password changes, session revocations, token reuse and task changes. Entries older than `AUDIT_RETENTION_DAYS` (default 90, `0` keeps everything) are purged by the cleanup job.
+- **Audit trail**: logins (successful and failed), logout, registration, user creation, block/unblock, role changes, password changes and resets, MFA enable/disable/reset, email verification, session revocations, token reuse and task changes. Entries older than `AUDIT_RETENTION_DAYS` (default 90, `0` keeps everything) are purged by the cleanup job.
 - **Roles**: `PATCH /api/users/:id/role` promotes or demotes; the system can never be left without an active administrator (delete, suspend and demote are all checked inside a transaction).
 
 ### Pre-seeded Demo Credentials
@@ -385,6 +388,13 @@ Most errors also carry `meta`. A few are produced by infrastructure middleware a
 | `POST` | `/api/auth/login` | Authenticate, create database session, issue tokens (account lockout after 5 failures) | 10 req/min |
 | `POST` | `/api/auth/refresh` | Renew token pair with **Token Rotation** (`409` on concurrent refresh) | 30 req/min |
 | `POST` | `/api/auth/logout` | Deactivate session and revoke refresh tokens | No |
+| `POST` | `/api/auth/forgot-password` | Email a single-use reset link (always `202`) | 10 req/hour |
+| `POST` | `/api/auth/reset-password` | Set a new password with the emailed token; revokes all sessions | 20 req/hour |
+| `POST` | `/api/auth/verify-email` | Verify the address with the emailed token | 30 req/hour |
+| `POST` | `/api/auth/resend-verification` | Email a new verification link (always `202`) | 10 req/hour |
+| `POST` | `/api/auth/mfa/setup` | Start 2FA enrolment (password required): returns secret and `otpauth://` URI | Bearer, 10 req/min |
+| `POST` | `/api/auth/mfa/enable` | Confirm with the first code; returns 10 recovery codes once | Bearer, 10 req/min |
+| `POST` | `/api/auth/mfa/disable` | Disable 2FA (password + code or recovery code) | Bearer, 10 req/min |
 
 
 ### Session Management (`/api/sessions`)
@@ -400,7 +410,8 @@ Most errors also carry `meta`. A few are produced by infrastructure middleware a
 | Method | Endpoint | Description | Auth |
 |---|---|---|---|
 | `GET` | `/api/tasks` | Paginated list (`?page=1&limit=10&search=text&completed=true&include=user&includeDeleted=true&sort=-createdAt,title&filter[completed]=true`) | Bearer |
-| `GET` | `/api/tasks/:id` | Get single task (`?include=user`, `?includeDeleted=true` for soft-deleted; 404 if missing or belonging to another user) | Bearer |
+| `GET` | `/api/tasks?userId=…` or `?scope=all` | *Admin only*: list another user's (or everyone's) tasks; `403` for everyone else | Admin |
+| `GET` | `/api/tasks/:id` | Get single task (`?include=user`, `?includeDeleted=true` for soft-deleted; 404 if missing or belonging to another user, admins can read any) | Bearer |
 | `POST` | `/api/tasks` | Create task (automatically assigned to token's userId, generates AuditLog) | Bearer |
 | `PUT` | `/api/tasks/:id` | Update title, description, or completed state (generates AuditLog) | Bearer |
 | `DELETE` | `/api/tasks/:id` | **Soft-delete** task (`deletedAt: now()`). Add `?permanent=true` for physical delete | Bearer |
@@ -412,7 +423,8 @@ Most errors also carry `meta`. A few are produced by infrastructure middleware a
 | `GET` | `/api/users` | Paginated users list (`?page=1&limit=10&search=ana&role=user&include=tasks,sessions&includeDeleted=true&sort=-createdAt,name&filter[role]=user`) | Admin |
 | `GET` | `/api/users/:id` | Get user details (`?include=tasks,sessions`); Admin, or the user themselves | Bearer |
 | `POST` | `/api/users` | Create user with any role (public sign-up lives at `/api/auth/register`) | Admin |
-| `PUT` | `/api/users/:id` | Update own user profile (or any profile if Admin). Own password change needs `currentPassword` and revokes other sessions | Bearer |
+| `PUT` | `/api/users/:id` | Update own user profile (or any profile if Admin). Changing your own password or email needs `currentPassword`; a password change revokes other sessions | Bearer |
+| `DELETE` | `/api/users/:id/mfa` | *Admin only*: remove a user's 2FA (lost device) and revoke their sessions | Admin |
 | `PATCH` | `/api/users/:id/role` | **Promote / demote** *(Admin only)*: cannot change your own role or demote the last active admin | Admin |
 | `PATCH` | `/api/users/:id/block` | **Suspend / Reactivate User** *(Admin only)*: Immediately revokes all active sessions | Admin |
 | `POST` | `/api/users/:id/revoke-sessions` | Terminate all active sessions for a target user (self or Admin) | Bearer |
@@ -485,6 +497,7 @@ npm run lint:fix
 - [x] Admin-only user creation, public registration, last-admin protection, password-change session revocation
 - [x] Soft-deleted task visibility and restore
 - [x] OpenAPI spec validity, no code/spec drift, and response contracts checked against schemas
+- [x] Password recovery, email verification and TOTP two-factor authentication with recovery codes
 - [x] Typed RPC client (`hc<AppType>`) at runtime and at compile time
 - [x] Suspended accounts rejected at login and on existing tokens
 
@@ -506,6 +519,13 @@ All settings are environment variables, validated at startup (the process exits 
 | `CORS_ORIGINS` | `*` outside production, none in production | Comma-separated allowed origins. In production you must list your frontends (or set `*` explicitly) |
 | `ENABLE_DOCS` | `true` outside production | Expose `/docs` and `/openapi.json` |
 | `LOGIN_RATE_LIMIT_MAX` / `REFRESH_RATE_LIMIT_MAX` / `REGISTER_RATE_LIMIT_MAX` | `10` / `30` / `5` | Per-IP limits (login and refresh per minute; register per hour) |
+| `RECOVERY_RATE_LIMIT_MAX` / `MFA_RATE_LIMIT_MAX` | `10` / `10` | Per-IP limits for the recovery endpoints (per hour) and the MFA endpoints (per minute) |
+| `MAIL_TRANSPORT` | `log` outside production, `none` in production | `none`, `log` (prints messages, tokens included: development only), `smtp` or `memory` (tests). Recovery and verification need `smtp` to reach anyone |
+| `SMTP_URL` / `MAIL_FROM` | — / `Hono API <no-reply@localhost>` | SMTP connection (e.g. `smtps://user:pass@host:465`) and sender |
+| `APP_URL` | `http://localhost:3000` | Frontend base URL for the emailed links (`/reset-password?token=…`, `/verify-email?token=…`) |
+| `PASSWORD_RESET_TTL_MINUTES` / `EMAIL_VERIFY_TTL_HOURS` | `60` / `24` | Lifetime of the emailed tokens |
+| `REQUIRE_EMAIL_VERIFICATION` | `false` | Refuse login until the email is verified (requires `MAIL_TRANSPORT=smtp`) |
+| `MFA_ENCRYPTION_KEY` / `MFA_ISSUER` | derived from `JWT_SECRET` / `Hono API` | Key (≥ 32 chars) encrypting TOTP secrets at rest, and the name shown in authenticator apps. Changing the key invalidates enrolled secrets |
 | `LOGIN_LOCKOUT_MAX_FAILURES` / `LOGIN_LOCKOUT_MINUTES` | `5` / `15` | Failed passwords before an account is locked, and for how long |
 | `AUDIT_RETENTION_DAYS` | `90` | Days to keep audit entries (`0` = forever) |
 | `REFRESH_REUSE_GRACE_SECONDS` | `10` | Window in which reusing a just-rotated refresh token is treated as a concurrent refresh instead of theft |

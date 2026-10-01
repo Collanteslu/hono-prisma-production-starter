@@ -18,11 +18,48 @@ model User {
   deletedAt     DateTime? // Soft delete timestamp
   createdAt     DateTime  @default(now())
 
+  // Email verification and two-factor authentication (TOTP)
+  emailVerifiedAt DateTime?
+  totpSecret      String? // AES-256-GCM encrypted base32 secret (omitted from every query by default)
+  totpEnabledAt   DateTime? // null while setup is pending or MFA is off
+  totpLastStep    Int? // last accepted 30s time step, so a code cannot be replayed (omitted by default)
+
   // Relaciones
   tasks         Task[]
   refreshTokens RefreshToken[]
   sessions      Session[]
   auditLogs     AuditLog[]
+  authTokens    AuthToken[]
+  recoveryCodes RecoveryCode[]
+}
+
+/// Single-use tokens emailed to users (password reset, email verification). Stored only as SHA-256.
+model AuthToken {
+  id        String    @id @default(uuid())
+  userId    String
+  type      String // "password_reset" | "email_verify"
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+  @@index([expiresAt])
+}
+
+/// One-time MFA recovery codes, stored only as SHA-256.
+model RecoveryCode {
+  id        String    @id @default(uuid())
+  userId    String
+  codeHash  String    @unique
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 model Session {

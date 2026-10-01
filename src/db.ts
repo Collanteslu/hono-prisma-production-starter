@@ -41,8 +41,12 @@ const adapter = new PrismaLibSql({
   timeout: 5000,
 });
 
-// Password hashes are omitted from every query by default; opt in explicitly with `omit: { password: false }`.
-export const prisma = new PrismaClient({ adapter, omit: { user: { password: true } } });
+// Password hashes and MFA secrets are omitted from every query by default; opt in explicitly,
+// e.g. `omit: { password: false }`.
+export const prisma = new PrismaClient({
+  adapter,
+  omit: { user: { password: true, totpSecret: true, totpLastStep: true } },
+});
 
 /**
  * Database seeder executed during application startup.
@@ -63,6 +67,7 @@ export async function seedDatabase() {
           email: env.ADMIN_EMAIL.toLowerCase(),
           password: hashedPassword,
           role: "admin",
+          emailVerifiedAt: new Date(),
         },
       });
       logger.info("✔ Production administrator created successfully.");
@@ -85,6 +90,7 @@ export async function seedDatabase() {
         email: "admin@example.com",
         password: hashedPassword,
         role: "admin",
+        emailVerifiedAt: new Date(),
         tasks: {
           create: [
             {
@@ -112,6 +118,7 @@ export async function seedDatabase() {
         email: "ana@example.com",
         password: hashedPassword,
         role: "user",
+        emailVerifiedAt: new Date(),
         tasks: {
           create: [
             {

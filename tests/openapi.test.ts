@@ -58,7 +58,8 @@ describe("OpenAPI specification", () => {
   it("marks every protected route with the BearerAuth security scheme", async () => {
     const spec = await getSpec();
     for (const [path, ops] of Object.entries(spec.paths)) {
-      const isPublic = path === "/healthz" || path.startsWith("/api/auth");
+      const isPublic =
+        path === "/healthz" || (path.startsWith("/api/auth") && !path.startsWith("/api/auth/mfa"));
       for (const [method, op] of Object.entries(ops)) {
         expect(Boolean(op.security?.length), `${method} ${path}`).toBe(!isPublic);
       }

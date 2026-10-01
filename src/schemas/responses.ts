@@ -94,6 +94,10 @@ export const userSchema = z
     blockedReason: z.string().nullable(),
     deletedAt: nullableDateTime,
     createdAt: dateTime,
+    emailVerifiedAt: nullableDateTime,
+    totpEnabledAt: nullableDateTime.openapi({
+      description: "Fecha de activación del 2FA (null si está desactivado)",
+    }),
     tasks: z.array(taskSchema.omit({ user: true })).optional(),
     sessions: z.array(sessionSchema).optional(),
   })

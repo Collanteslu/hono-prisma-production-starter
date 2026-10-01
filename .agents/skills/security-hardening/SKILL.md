@@ -52,6 +52,13 @@ The reference implementations are `src/middleware/auth.ts`, `src/services/sessio
 - Rate limit and lockout counters live in the database (`RateLimitBucket`, `src/lib/rateLimitStore.ts`), so they are shared by every instance using the same database. Give every limiter a stable, unique `name`.
 - Anything that can leave the system without an active admin (delete, suspend, demote) must run `isLastActiveAdmin(tx, user)` inside the same transaction as the write.
 
+### 4b. Account Recovery and Two-Factor Authentication
+- Flows that start from an email address (`forgot-password`, `resend-verification`) must answer identically whether or not the account exists, and must send the mail in the background (`inBackground()`), so neither the body nor the latency leaks. Throttle per address as well as per IP.
+- Emailed tokens come from `createAuthToken()` and are claimed with `consumeAuthToken()` (single atomic statement, stored only as SHA-256). Never log or return them outside the `log`/`memory` mail transports.
+- Changing your own password **or email** requires `currentPassword`; a password reset revokes every session in the same transaction as the update.
+- TOTP lives in `src/lib/totp.ts` (RFC 6238, no dependency). A time step is accepted once (`verifyUserTotp` updates `totpLastStep` conditionally); secrets are encrypted at rest and, like `password`, omitted from the Prisma client by default (`omit` in `src/db.ts`): opt in explicitly and never return them.
+- Login with 2FA: wrong factor counts towards the lockout, a missing one answers `401` with `details.code = "MFA_REQUIRED"`.
+
 ### 5. Client IP and Proxies
 - Always resolve the IP with `getClientIp(c)` (`src/lib/clientIp.ts`). `X-Forwarded-For` is trusted **only** when `TRUST_PROXY=true`, and read from the right (`TRUST_PROXY_HOPS` trusted proxies): the leftmost entries are client-controlled. `CF-Connecting-IP` and `X-Real-IP` are ignored on purpose (a client can set them and many proxies forward them untouched). Otherwise spoofed values would poison sessions, audit logs and rate limiting.
 
@@ -61,7 +68,7 @@ The reference implementations are `src/middleware/auth.ts`, `src/services/sessio
 - `JWT_SECRET` / `JWT_REFRESH_SECRET` have no defaults; in production they must be ≥ 32 characters and different (`src/config/env.ts`). Never commit real secrets (Compose reads them from the environment / `--env-file`), and never commit Bruno environment values or tokens.
 
 ### 7. Auditing
-- Record security-relevant events with `recordAudit()`: `LOGIN`, `LOGIN_FAILED`, `LOGOUT`, `REGISTER`, `CREATE`, `UPDATE`, `PASSWORD_CHANGE`, `ROLE_CHANGE`, `SOFT_DELETE`, `RESTORE`, `DELETE_PERMANENT`, `BLOCK`, `UNBLOCK`, `REVOKE_SESSION`, `REVOKE_ALL_SESSIONS`, `TOKEN_REUSE_DETECTED`. It never throws, so it cannot break the user's request.
+- Record security-relevant events with `recordAudit()`: `LOGIN`, `LOGIN_FAILED`, `LOGOUT`, `REGISTER`, `CREATE`, `UPDATE`, `PASSWORD_CHANGE`, `ROLE_CHANGE`, `PASSWORD_RESET_REQUESTED`, `PASSWORD_RESET`, `EMAIL_VERIFIED`, `MFA_ENABLED`, `MFA_DISABLED`, `MFA_RESET`, `SOFT_DELETE`, `RESTORE`, `DELETE_PERMANENT`, `BLOCK`, `UNBLOCK`, `REVOKE_SESSION`, `REVOKE_ALL_SESSIONS`, `TOKEN_REUSE_DETECTED`. It never throws, so it cannot break the user's request.
 - Do not put secrets or tokens in `details`.
 
 ## Review Checklist

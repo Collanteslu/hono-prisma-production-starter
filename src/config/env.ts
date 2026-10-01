@@ -57,18 +57,66 @@ const envSchema = z
     LOGIN_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(10),
     REFRESH_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(30),
     REGISTER_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(5),
+    // Per-IP limits for the recovery endpoints (per hour) and the MFA endpoints (per minute)
+    RECOVERY_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(10),
+    MFA_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(10),
     // Failed passwords before an account is locked, and for how long
     LOGIN_LOCKOUT_MAX_FAILURES: z.coerce.number().int().positive().default(5),
     LOGIN_LOCKOUT_MINUTES: z.coerce.number().positive().default(15),
     // Audit entries older than this many days are purged (0 keeps them forever)
     AUDIT_RETENTION_DAYS: z.coerce.number().int().min(0).default(90),
+    // --- Account recovery, email verification and two-factor authentication ---
+    // "none" disables outgoing mail (default in production), "log" prints messages to the log
+    // (default elsewhere, handy in development), "memory" keeps them in an array (tests only).
+    MAIL_TRANSPORT: z
+      .enum(["none", "log", "smtp", "memory"])
+      .default(process.env.NODE_ENV === "production" ? "none" : "log"),
+    SMTP_URL: z.string().optional(), // e.g. smtps://user:pass@smtp.example.com:465
+    MAIL_FROM: z.string().default("Hono API <no-reply@localhost>"),
+    // Frontend base URL used to build the links sent by email (token is appended as ?token=...)
+    APP_URL: z.string().url().default("http://localhost:3000"),
+    PASSWORD_RESET_TTL_MINUTES: z.coerce.number().positive().default(60),
+    EMAIL_VERIFY_TTL_HOURS: z.coerce.number().positive().default(24),
+    // When true, accounts must verify their email before they can sign in
+    REQUIRE_EMAIL_VERIFICATION: z
+      .string()
+      .optional()
+      .transform((val) => val === "true" || val === "1"),
+    // Key encrypting TOTP secrets at rest (defaults to a key derived from JWT_SECRET)
+    MFA_ENCRYPTION_KEY: z.string().min(32).optional(),
+    MFA_ISSUER: z.string().default("Hono API"),
     LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).optional(),
     // Seconds during which reusing a just-rotated refresh token is treated as a concurrent refresh
     REFRESH_REUSE_GRACE_SECONDS: z.coerce.number().int().min(0).default(10),
   })
   .superRefine((cfg, ctx) => {
     // Production hardening: refuse weak or shared signing secrets
+    if (cfg.MAIL_TRANSPORT === "smtp" && !cfg.SMTP_URL) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["SMTP_URL"],
+        message: "SMTP_URL is required when MAIL_TRANSPORT=smtp",
+      });
+    }
+    if (
+      cfg.REQUIRE_EMAIL_VERIFICATION &&
+      (cfg.MAIL_TRANSPORT === "none" || cfg.MAIL_TRANSPORT === "log")
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["REQUIRE_EMAIL_VERIFICATION"],
+        message:
+          "REQUIRE_EMAIL_VERIFICATION needs a mail transport that delivers (MAIL_TRANSPORT=smtp), otherwise nobody could verify",
+      });
+    }
     if (cfg.NODE_ENV !== "production") return;
+    if (cfg.MAIL_TRANSPORT === "memory") {
+      ctx.addIssue({
+        code: "custom",
+        path: ["MAIL_TRANSPORT"],
+        message: "MAIL_TRANSPORT=memory is for tests only",
+      });
+    }
     for (const key of ["JWT_SECRET", "JWT_REFRESH_SECRET"] as const) {
       if (cfg[key].length < 32) {
         ctx.addIssue({

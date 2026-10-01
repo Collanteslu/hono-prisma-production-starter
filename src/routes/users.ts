@@ -6,6 +6,7 @@
  */
 
 import { createRoute, z } from "@hono/zod-openapi";
+import { env } from "../config/env.js";
 import { prisma } from "../db.js";
 import type { UserWhereInput } from "../generated/client/models.js";
 import { recordAudit } from "../lib/audit.js";
@@ -25,6 +26,7 @@ import {
   userQuerySchema,
 } from "../schemas/index.js";
 import { successSchema, userSchema } from "../schemas/responses.js";
+import { inBackground, sendVerificationEmail } from "../services/accountMail.js";
 import { revokeUserSessions, userSessionRevocationOps } from "../services/sessions.js";
 import { comparePassword, hashPassword } from "../utils/password.js";
 
@@ -137,6 +139,26 @@ const roleRoute = createRoute({
       ...adminErrors,
       404: "Usuario no encontrado",
       409: "Es el último administrador activo",
+    }),
+  },
+});
+
+const resetMfaRoute = createRoute({
+  method: "delete",
+  path: "/{id}/mfa",
+  tags: ["Users"],
+  summary: "Desactivar el 2FA de un usuario (Solo Admin)",
+  description:
+    "Para quien perdió su dispositivo y sus códigos de recuperación. Borra el secreto y los códigos, y cierra todas las sesiones del usuario.",
+  security: secured,
+  middleware: [requireAdmin] as const,
+  request: { params: idParamSchema },
+  responses: {
+    200: jsonResponse(successSchema(z.null()), "2FA desactivado"),
+    ...errorResponses({
+      ...adminErrors,
+      404: "Usuario no encontrado",
+      409: "El usuario no tiene 2FA",
     }),
   },
 });
@@ -419,6 +441,39 @@ export const userRoutes = router
     });
   })
   /**
+   * DELETE /api/users/:id/mfa
+   * Admin reset of a user's two-factor authentication (lost device).
+   */
+  .openapi(resetMfaRoute, async (c) => {
+    const { id } = c.req.valid("param");
+    const currentUser = c.get("user");
+
+    const target = await prisma.user.findUnique({ where: { id } });
+    if (!target || target.deletedAt)
+      return errorResponse(c, `User with ID '${id}' not found.`, 404);
+    if (!target.totpEnabledAt)
+      return errorResponse(c, "The user has no two-factor authentication.", 409);
+
+    await prisma.$transaction([
+      prisma.user.update({
+        where: { id },
+        data: { totpSecret: null, totpEnabledAt: null, totpLastStep: null },
+      }),
+      prisma.recoveryCode.deleteMany({ where: { userId: id } }),
+      ...userSessionRevocationOps(id),
+    ]);
+
+    await recordAudit(c, {
+      userId: currentUser.userId,
+      action: "MFA_RESET",
+      entity: "User",
+      entityId: id,
+    });
+    return successResponse(c, null, {
+      message: "Two-factor authentication removed and sessions revoked.",
+    });
+  })
+  /**
    * POST /api/users/:id/revoke-sessions
    * Revokes all active sessions for a target user (User self-service or Admin).
    */
@@ -475,8 +530,10 @@ export const userRoutes = router
     }
 
     // A stolen access token must not be enough to take over the account: changing your own
-    // password requires proving you know the current one (admins resetting others are exempt).
-    if (password && currentUser.userId === id) {
+    // password or email (the password-reset address) requires the current password. Admins
+    // modifying someone else are exempt.
+    const emailChanging = Boolean(email && email !== existingUser.email);
+    if ((password || emailChanging) && currentUser.userId === id) {
       const stored = await prisma.user.findUnique({
         where: { id },
         omit: { password: false },
@@ -499,7 +556,8 @@ export const userRoutes = router
       where: { id },
       data: {
         ...(name && { name }),
-        ...(email && { email }),
+        // A new address starts unverified
+        ...(emailChanging && { email, emailVerifiedAt: null }),
         ...(password && { password: await hashPassword(password) }),
       },
     });
@@ -519,6 +577,10 @@ export const userRoutes = router
       revokedSessionsCount = revoked.count;
     } else {
       updatedUser = await updateOp;
+    }
+
+    if (emailChanging && env.MAIL_TRANSPORT !== "none") {
+      inBackground(() => sendVerificationEmail(updatedUser));
     }
 
     await recordAudit(c, {

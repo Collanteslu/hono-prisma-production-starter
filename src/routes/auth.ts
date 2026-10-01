@@ -20,6 +20,8 @@ import {
   successSchema,
   userSchema,
 } from "../schemas/responses.js";
+import { inBackground, sendVerificationEmail } from "../services/accountMail.js";
+import { verifySecondFactor } from "../services/mfa.js";
 import {
   createSessionAndTokens,
   hashToken,
@@ -73,8 +75,8 @@ const loginRoute = createRoute({
     200: jsonResponse(loginResponseSchema, "Login exitoso"),
     ...errorResponses({
       400: "Error de validación o JSON mal formado",
-      401: "Credenciales inválidas",
-      403: "Cuenta suspendida",
+      401: "Credenciales inválidas, o falta/es incorrecto el código 2FA (`details.code`: `MFA_REQUIRED` o `MFA_INVALID`)",
+      403: "Cuenta suspendida, o email sin verificar (`details.code`: `EMAIL_NOT_VERIFIED`)",
       429: "Rate limit excedido o cuenta bloqueada temporalmente",
     }),
   },
@@ -138,6 +140,8 @@ export const authRoutes = router
       entityId: newUser.id,
     });
 
+    if (env.MAIL_TRANSPORT !== "none") inBackground(() => sendVerificationEmail(newUser));
+
     return successResponse(c, newUser, {
       status: 201,
       message: "Account registered successfully.",
@@ -148,7 +152,7 @@ export const authRoutes = router
    * Validates user credentials, ensures account is not blocked, and establishes an active session.
    */
   .openapi(loginRoute, async (c) => {
-    const { email, password } = c.req.valid("json");
+    const { email, password, totpCode, recoveryCode } = c.req.valid("json");
 
     const lockedForSeconds = await loginLockout.retryAfterSeconds(email);
     if (lockedForSeconds > 0) {
@@ -162,7 +166,7 @@ export const authRoutes = router
 
     const user = await prisma.user.findUnique({
       where: { email },
-      omit: { password: false },
+      omit: { password: false, totpSecret: false, totpLastStep: false },
     });
 
     // Constant-time bcrypt comparison (always executed to prevent timing side-channel leaks)
@@ -182,12 +186,38 @@ export const authRoutes = router
       return errorResponse(c, "Invalid credentials (incorrect email or password)", 401);
     }
 
-    await loginLockout.reset(email);
-
     // Verify account suspension status after password check to prevent status enumeration
     if (user.isBlocked) {
+      await loginLockout.reset(email);
       return errorResponse(c, "Account has been suspended. Please contact support.", 403);
     }
+
+    if (env.REQUIRE_EMAIL_VERIFICATION && !user.emailVerifiedAt) {
+      await loginLockout.reset(email);
+      return errorResponse(c, "Email address not verified. Check your inbox.", 403, {
+        code: "EMAIL_NOT_VERIFIED",
+      });
+    }
+
+    // Second factor: the password alone is not enough once 2FA is on. A wrong code counts as a
+    // failed login (same lockout), a missing one does not.
+    if (user.totpEnabledAt) {
+      if (!totpCode && !recoveryCode) {
+        return errorResponse(c, "Two-factor code required.", 401, { code: "MFA_REQUIRED" });
+      }
+      if (!(await verifySecondFactor(user, { code: totpCode, recoveryCode }))) {
+        await loginLockout.recordFailure(email);
+        await recordAudit(c, {
+          userId: user.id,
+          action: "LOGIN_FAILED",
+          entity: "Session",
+          details: { email, reason: "invalid_second_factor" },
+        });
+        return errorResponse(c, "Invalid two-factor code.", 401, { code: "MFA_INVALID" });
+      }
+    }
+
+    await loginLockout.reset(email);
 
     const sessionData = await createSessionAndTokens(
       user,

@@ -49,6 +49,12 @@ export async function cleanupExpiredSessions(): Promise<{
 
     // 3. Purge ended rate-limit windows and audit entries past the retention period
     const deletedBuckets = await purgeExpiredBuckets();
+    // Emailed tokens past their expiry (or used more than a day ago) are of no further use
+    await prisma.authToken.deleteMany({
+      where: {
+        OR: [{ expiresAt: { lt: now } }, { usedAt: { lt: new Date(now.getTime() - DAY_MS) } }],
+      },
+    });
     const deletedAuditLogs =
       env.AUDIT_RETENTION_DAYS > 0
         ? (

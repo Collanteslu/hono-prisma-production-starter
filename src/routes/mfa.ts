@@ -1,0 +1,196 @@
+/**
+ * @file mfa.ts
+ * @description Two-factor authentication (TOTP) management, mounted under /api/auth/mfa.
+ * Enrolling needs the password, so a stolen access token cannot attach an attacker's authenticator.
+ */
+
+import { createRoute, z } from "@hono/zod-openapi";
+import { env } from "../config/env.js";
+import { prisma } from "../db.js";
+import { recordAudit } from "../lib/audit.js";
+import { createRouter, errorResponses, jsonBody, jsonResponse, secured } from "../lib/openapi.js";
+import { errorResponse, successResponse } from "../lib/response.js";
+import {
+  decryptSecret,
+  encryptSecret,
+  generateRecoveryCodes,
+  generateTotpSecret,
+  hashRecoveryCode,
+  otpauthUrl,
+  verifyTotp,
+} from "../lib/totp.js";
+import { authMiddleware } from "../middleware/auth.js";
+import { rateLimiter } from "../middleware/rateLimit.js";
+import { mfaDisableSchema, mfaEnableSchema, mfaSetupSchema } from "../schemas/index.js";
+import { successSchema } from "../schemas/responses.js";
+import { verifySecondFactor } from "../services/mfa.js";
+import { userSessionRevocationOps } from "../services/sessions.js";
+import { comparePassword } from "../utils/password.js";
+
+const router = createRouter();
+
+router.use("/mfa/*", authMiddleware);
+router.use("/mfa/*", rateLimiter("mfa", 60_000, env.MFA_RATE_LIMIT_MAX));
+
+const authErrors = {
+  401: "Token ausente, inválido o sesión revocada",
+  429: "Rate limit excedido",
+} as const;
+
+const setupRoute = createRoute({
+  method: "post",
+  path: "/mfa/setup",
+  tags: ["MFA"],
+  summary: "Iniciar el alta de 2FA (TOTP)",
+  description:
+    "Genera un secreto nuevo (cifrado en base de datos) y devuelve el `secret` y la URI `otpauth://` para mostrarla como QR. El 2FA no se activa hasta confirmar con `POST /mfa/enable`.",
+  security: secured,
+  request: jsonBody(mfaSetupSchema),
+  responses: {
+    200: jsonResponse(
+      successSchema(z.object({ secret: z.string(), otpauthUrl: z.string() })),
+      "Secreto generado",
+    ),
+    ...errorResponses({
+      400: "Error de validación",
+      ...authErrors,
+      403: "Contraseña incorrecta",
+      409: "El 2FA ya está activo",
+    }),
+  },
+});
+
+const enableRoute = createRoute({
+  method: "post",
+  path: "/mfa/enable",
+  tags: ["MFA"],
+  summary: "Confirmar y activar el 2FA",
+  description:
+    "Verifica el primer código de la app, activa el 2FA, cierra el resto de sesiones y devuelve 10 códigos de recuperación (se muestran una sola vez).",
+  security: secured,
+  request: jsonBody(mfaEnableSchema),
+  responses: {
+    200: jsonResponse(
+      successSchema(z.object({ recoveryCodes: z.array(z.string()) })),
+      "2FA activado",
+    ),
+    ...errorResponses({
+      400: "Código inválido",
+      ...authErrors,
+      409: "No hay un alta pendiente o ya está activo",
+    }),
+  },
+});
+
+const disableRoute = createRoute({
+  method: "post",
+  path: "/mfa/disable",
+  tags: ["MFA"],
+  summary: "Desactivar el 2FA",
+  description: "Exige la contraseña y un código TOTP o un código de recuperación.",
+  security: secured,
+  request: jsonBody(mfaDisableSchema),
+  responses: {
+    200: jsonResponse(successSchema(z.null()), "2FA desactivado"),
+    ...errorResponses({
+      400: "Error de validación",
+      ...authErrors,
+      403: "Contraseña o código incorrectos",
+      409: "El 2FA no está activo",
+    }),
+  },
+});
+
+/** Loads the caller with the secrets the MFA flows need */
+function loadUser(id: string) {
+  return prisma.user.findUniqueOrThrow({
+    where: { id },
+    omit: { password: false, totpSecret: false, totpLastStep: false },
+  });
+}
+
+export const mfaRoutes = router
+  .openapi(setupRoute, async (c) => {
+    const { currentPassword } = c.req.valid("json");
+    const user = await loadUser(c.get("user").userId);
+
+    if (!(await comparePassword(currentPassword, user.password))) {
+      return errorResponse(c, "Current password is incorrect.", 403);
+    }
+    if (user.totpEnabledAt)
+      return errorResponse(c, "Two-factor authentication is already enabled.", 409);
+
+    const secret = generateTotpSecret();
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { totpSecret: encryptSecret(secret), totpLastStep: null },
+    });
+
+    return successResponse(c, { secret, otpauthUrl: otpauthUrl(secret, user.email) });
+  })
+  .openapi(enableRoute, async (c) => {
+    const { code } = c.req.valid("json");
+    const current = c.get("user");
+    const user = await loadUser(current.userId);
+
+    if (user.totpEnabledAt || !user.totpSecret) {
+      return errorResponse(c, "There is no pending two-factor setup. Call /mfa/setup first.", 409);
+    }
+    const step = verifyTotp(decryptSecret(user.totpSecret), code, null);
+    if (step === null) return errorResponse(c, "Invalid two-factor code.", 400);
+
+    const recoveryCodes = generateRecoveryCodes();
+    await prisma.$transaction([
+      prisma.user.update({
+        where: { id: user.id },
+        data: { totpEnabledAt: new Date(), totpLastStep: step },
+      }),
+      prisma.recoveryCode.deleteMany({ where: { userId: user.id } }),
+      prisma.recoveryCode.createMany({
+        data: recoveryCodes.map((rc) => ({ userId: user.id, codeHash: hashRecoveryCode(rc) })),
+      }),
+      // Any other device must sign in again, now with the second factor
+      ...userSessionRevocationOps(user.id, { exceptSessionId: current.sessionId }),
+    ]);
+
+    await recordAudit(c, {
+      userId: user.id,
+      action: "MFA_ENABLED",
+      entity: "User",
+      entityId: user.id,
+    });
+    return successResponse(
+      c,
+      { recoveryCodes },
+      { message: "Two-factor authentication enabled. Store the recovery codes safely." },
+    );
+  })
+  .openapi(disableRoute, async (c) => {
+    const { currentPassword, code, recoveryCode } = c.req.valid("json");
+    const user = await loadUser(c.get("user").userId);
+
+    if (!user.totpEnabledAt)
+      return errorResponse(c, "Two-factor authentication is not enabled.", 409);
+    if (!(await comparePassword(currentPassword, user.password))) {
+      return errorResponse(c, "Current password or code is incorrect.", 403);
+    }
+    if (!(await verifySecondFactor(user, { code, recoveryCode }))) {
+      return errorResponse(c, "Current password or code is incorrect.", 403);
+    }
+
+    await prisma.$transaction([
+      prisma.user.update({
+        where: { id: user.id },
+        data: { totpSecret: null, totpEnabledAt: null, totpLastStep: null },
+      }),
+      prisma.recoveryCode.deleteMany({ where: { userId: user.id } }),
+    ]);
+
+    await recordAudit(c, {
+      userId: user.id,
+      action: "MFA_DISABLED",
+      entity: "User",
+      entityId: user.id,
+    });
+    return successResponse(c, null, { message: "Two-factor authentication disabled." });
+  });
