@@ -28,7 +28,7 @@ The reference implementations are `src/middleware/auth.ts`, `src/services/sessio
   - the **role is taken from the database**, not from the JWT, so demotions apply immediately.
 - Use `requireAdmin` (route `middleware: [requireAdmin] as const`) for admin-only routes; do not re-check `role` by hand.
 - Whenever an account is blocked or deleted, revoke its sessions **in the same transaction** with `userSessionRevocationOps(userId)`; use `revokeUserSessions()` / `revokeSession()` elsewhere. Never leave sessions half-revoked.
-- Changing a password must revoke the user's other sessions (see `PUT /api/users/:id`).
+- Changing your own password requires `currentPassword`, and must revoke the user's other sessions in the same transaction as the update (see `PUT /api/users/:id`). Refresh tokens never outlive the session: it is absolute, fixed at login.
 - Never return `error.message` from token verification to clients.
 
 ### 3. Strict Resource Ownership (Tenant Isolation)
@@ -55,7 +55,7 @@ The reference implementations are `src/middleware/auth.ts`, `src/services/sessio
 - Always resolve the IP with `getClientIp(c)` (`src/lib/clientIp.ts`). `X-Forwarded-For` is trusted **only** when `TRUST_PROXY=true`, and read from the right (`TRUST_PROXY_HOPS` trusted proxies): the leftmost entries are client-controlled. `CF-Connecting-IP` and `X-Real-IP` are ignored on purpose (a client can set them and many proxies forward them untouched). Otherwise spoofed values would poison sessions, audit logs and rate limiting.
 
 ### 6. Passwords and Secrets
-- Hash with `hashPassword()` from `src/utils/password.ts` (bcrypt, 12 rounds). Passwords are 8–72 characters (bcrypt ignores anything beyond 72 bytes).
+- Hash with `hashPassword()` from `src/utils/password.ts` (bcrypt, 12 rounds). Passwords are 8–72 characters and at most 72 UTF-8 bytes (bcrypt ignores anything beyond 72 bytes, so the schema checks bytes, not just characters).
 - The Prisma client omits `User.password` from every query (`omit` in `src/db.ts`). Only login opts in with `omit: { password: false }`. Never add it back to a response.
 - `JWT_SECRET` / `JWT_REFRESH_SECRET` have no defaults; in production they must be ≥ 32 characters and different (`src/config/env.ts`). Never commit real secrets (Compose reads them from the environment / `--env-file`), and never commit Bruno environment values or tokens.
 

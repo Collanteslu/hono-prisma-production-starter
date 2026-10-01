@@ -29,9 +29,15 @@ export function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
-async function signTokenPair(user: TokenSubject, sessionId: string) {
+/**
+ * Signs an access + refresh pair. The session is absolute: its lifetime is fixed at login, so a
+ * rotated refresh token never outlives `sessionExpiresAt` (defaults to a full TTL for new sessions).
+ */
+async function signTokenPair(user: TokenSubject, sessionId: string, sessionExpiresAt?: Date) {
   const nowSec = Math.floor(Date.now() / 1000);
-  const refreshExp = nowSec + SESSION_TTL_SECONDS;
+  const refreshExp = sessionExpiresAt
+    ? Math.floor(sessionExpiresAt.getTime() / 1000)
+    : nowSec + SESSION_TTL_SECONDS;
 
   const accessToken = await sign(
     {
@@ -138,7 +144,7 @@ export async function rotateRefreshToken(
   }
 
   const tokenHash = hashToken(refreshToken);
-  const next = await signTokenPair(user, sessionId);
+  const next = await signTokenPair(user, sessionId, session.expiresAt);
 
   const rotated = await prisma.$transaction(async (tx) => {
     const claimed = await tx.refreshToken.updateMany({

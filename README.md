@@ -250,7 +250,8 @@ sequenceDiagram
 - **Real-time authorization**: blocking, soft-deleting, role changes and session revocation take effect on the very next request (role is read from the database, not from the JWT).
 - **Brute-force protection**: per-IP rate limits on `/login`, `/refresh` and `/register`, plus a per-account lockout after 5 failed logins (15 min). Limits are in-memory (per instance). Note the lockout is keyed by email, so someone can deliberately lock a known address for 15 minutes; this is the usual trade-off against credential stuffing.
 - **Trusted client IP**: `X-Forwarded-For` is only honoured when `TRUST_PROXY=true`, and it is read **from the right** (`TRUST_PROXY_HOPS` trusted proxies, default 1) because the leftmost entries are client-controlled. `CF-Connecting-IP` and `X-Real-IP` are ignored, since clients can set them and many proxies forward them untouched. Used for sessions, the audit log and rate limiting.
-- **Password policy**: 8–72 characters (bcrypt cost 12). Changing a password revokes every other session of the account.
+- **Password policy**: 8–72 characters and at most 72 UTF-8 bytes (bcrypt cost 12). Changing your own password requires `currentPassword`; the update and the revocation of every other session run in one transaction. Admins can reset another user's password without it.
+- **Absolute sessions**: a session lasts 7 days from login; rotated refresh tokens are capped to that expiry, so users must log in again after day 7.
 - **Startup guards**: the app refuses to boot without `JWT_SECRET` / `JWT_REFRESH_SECRET`, and in production requires both to be at least 32 characters and different from each other. `.env.example` ships with blank secrets on purpose.
 - **Admin safety**: the last active administrator cannot delete their account; deleted accounts cannot be reactivated.
 - **Audit trail**: logins (successful and failed), logout, registration, user creation, block/unblock, password changes, session revocations, token reuse and task changes.
@@ -409,7 +410,7 @@ Most errors also carry `meta`. A few are produced by infrastructure middleware a
 | `GET` | `/api/users` | Paginated users list (`?page=1&limit=10&search=ana&role=user&include=tasks,sessions&includeDeleted=true&sort=-createdAt,name&filter[role]=user`) | Admin |
 | `GET` | `/api/users/:id` | Get user details (`?include=tasks,sessions`); Admin, or the user themselves | Bearer |
 | `POST` | `/api/users` | Create user with any role (public sign-up lives at `/api/auth/register`) | Admin |
-| `PUT` | `/api/users/:id` | Update own user profile (or any profile if Admin). A password change revokes other sessions | Bearer |
+| `PUT` | `/api/users/:id` | Update own user profile (or any profile if Admin). Own password change needs `currentPassword` and revokes other sessions | Bearer |
 | `PATCH` | `/api/users/:id/block` | **Suspend / Reactivate User** *(Admin only)*: Immediately revokes all active sessions | Admin |
 | `POST` | `/api/users/:id/revoke-sessions` | Terminate all active sessions for a target user (self or Admin) | Bearer |
 | `DELETE` | `/api/users/:id` | Delete own account (or any if Admin). **Soft-delete** by default, `?permanent=true` for cascade | Bearer |
