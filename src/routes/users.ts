@@ -27,6 +27,7 @@ import {
 } from "../schemas/index.js";
 import { successSchema, userSchema } from "../schemas/responses.js";
 import { inBackground, sendVerificationEmail } from "../services/accountMail.js";
+import { deletePendingAuthTokensOp } from "../services/authTokens.js";
 import { revokeUserSessions, userSessionRevocationOps } from "../services/sessions.js";
 import { comparePassword, hashPassword } from "../utils/password.js";
 
@@ -563,18 +564,22 @@ export const userRoutes = router
     });
 
     // A password change invalidates every other session (keep the caller's own session alive).
-    // Both happen in one transaction: the new password never lands without the revocation.
+    // A password or email change also deletes every pending emailed token (reset / verification
+    // links sent before it must not survive it). All of it runs in one transaction.
     let updatedUser: Awaited<typeof updateOp>;
     let revokedSessionsCount = 0;
     if (password) {
-      const [user, revoked] = await prisma.$transaction([
+      const [user, , revoked] = await prisma.$transaction([
         updateOp,
+        deletePendingAuthTokensOp(id),
         ...userSessionRevocationOps(id, {
           exceptSessionId: currentUser.userId === id ? currentUser.sessionId : undefined,
         }),
       ]);
       updatedUser = user;
       revokedSessionsCount = revoked.count;
+    } else if (emailChanging) {
+      [updatedUser] = await prisma.$transaction([updateOp, deletePendingAuthTokensOp(id)]);
     } else {
       updatedUser = await updateOp;
     }
