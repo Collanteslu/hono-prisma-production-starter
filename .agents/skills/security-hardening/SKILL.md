@@ -65,7 +65,7 @@ The reference implementations are `src/middleware/auth.ts`, `src/services/sessio
 ### 6. Passwords and Secrets
 - Hash with `hashPassword()` from `src/utils/password.ts` (bcrypt, 12 rounds). Passwords are 8–72 characters and at most 72 UTF-8 bytes (bcrypt ignores anything beyond 72 bytes, so the schema checks bytes, not just characters).
 - The Prisma client omits `User.password` from every query (`omit` in `src/db.ts`). Only login opts in with `omit: { password: false }`. Never add it back to a response.
-- `JWT_SECRET` / `JWT_REFRESH_SECRET` have no defaults; in production they must be ≥ 32 characters and different (`src/config/env.ts`). Never commit real secrets (Compose reads them from the environment / `--env-file`), and never commit Bruno environment values or tokens.
+- `JWT_SECRET` / `JWT_REFRESH_SECRET` have no defaults and are required unless `AUTH_MODE=none` (no tokens are signed there; a random per-process value fills them); in production they must be ≥ 32 characters and different (`src/config/env.ts`). Cross-field rules for `AUTH_MODE` live in the same `superRefine`: never relax them to make a deployment boot. Never commit real secrets (Compose reads them from the environment / `--env-file`), and never commit Bruno environment values or tokens.
 
 ### 7. Auditing
 - Record security-relevant events with `recordAudit()`: `LOGIN`, `LOGIN_FAILED`, `LOGOUT`, `REGISTER`, `CREATE`, `UPDATE`, `PASSWORD_CHANGE`, `ROLE_CHANGE`, `PASSWORD_RESET_REQUESTED`, `PASSWORD_RESET`, `EMAIL_VERIFIED`, `MFA_ENABLED`, `MFA_DISABLED`, `MFA_RESET`, `SOFT_DELETE`, `RESTORE`, `DELETE_PERMANENT`, `BLOCK`, `UNBLOCK`, `REVOKE_SESSION`, `REVOKE_ALL_SESSIONS`, `TOKEN_REUSE_DETECTED`. It never throws, so it cannot break the user's request.

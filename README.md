@@ -413,7 +413,7 @@ Following API conventions (JSON:API, RFC 7807), responses include telemetry meta
     "requestId": "e15822e1-4560-4416-836b-67a6d80ff0a9",
     "timestamp": "2026-09-29T20:00:00.000Z",
     "durationMs": 4.12,
-    "apiVersion": "1.2.0"
+    "apiVersion": "2.0.0"
   }
 }
 ```
@@ -650,7 +650,9 @@ docker run --rm -v <project>_sqlite_data:/data -v "$PWD/backups:/backups" alpine
 
 ## 🆕 What's New
 
-**Selectable authentication level and agent guide** (this release)
+> **Version 2.0.0.** Major bump because some changes break existing API clients: `PUT /api/users/:id` needs `currentPassword` to change your own email or password, validation messages are now in English, and `Task.userId` can be `null` (also in the typed `hc<AppType>` client). Apply the new migrations (`npm run db:deploy`, automatic in Docker) and review the new variables (`AUTH_MODE`, mail, MFA) in [Configuration](#-configuration).
+
+**Selectable authentication level and agent guide**
 - `AUTH_MODE=none | basic | full` (default `full`, the previous behaviour). Disabled modules are not mounted, answer `404` and are absent from `/openapi.json`, `/docs` and `GET /` (which now reports `authMode`). Env combinations are validated at startup.
 - `Task.userId` is optional (migration `optional_task_owner`, existing rows are copied unchanged) so the example resource can be public and ownerless in `none` mode. The schema is the same in every mode.
 - nodemailer is loaded only when `MAIL_TRANSPORT=smtp` is actually used; `basic` never sends account emails.
