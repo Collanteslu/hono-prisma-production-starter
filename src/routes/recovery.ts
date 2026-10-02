@@ -195,7 +195,7 @@ export const recoveryRoutes = router
 
     inBackground(async () => {
       const user = await prisma.user.findUnique({ where: { email } });
-      if (!user || user.deletedAt || user.emailVerifiedAt) return;
+      if (!user || user.deletedAt || user.isBlocked || user.emailVerifiedAt) return;
       if (!(await mayEmail("verify", email))) return;
       await sendVerificationEmail(user);
     });

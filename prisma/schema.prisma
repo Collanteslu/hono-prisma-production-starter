@@ -54,13 +54,14 @@ model AuthToken {
 model RecoveryCode {
   id        String    @id @default(uuid())
   userId    String
-  codeHash  String    @unique
+  codeHash  String
   usedAt    DateTime?
   createdAt DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@index([userId])
+  // Unique per user only: codes of different users never clash (this index also serves userId lookups)
+  @@unique([userId, codeHash])
 }
 
 model Session {

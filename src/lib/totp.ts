@@ -142,11 +142,11 @@ export function decryptSecret(stored: string): string {
 
 // --- Recovery codes -------------------------------------------------------------------------
 
-/** 10 one-time codes like `a1b2c-3d4e5` (50 bits each) */
+/** 10 one-time codes like `abcd-efgh-ijkl-mnop`: 16 base32 characters, 80 random bits each */
 export function generateRecoveryCodes(count = 10): string[] {
   return Array.from({ length: count }, () => {
-    const raw = randomBytes(7).toString("hex").slice(0, 10);
-    return `${raw.slice(0, 5)}-${raw.slice(5)}`;
+    const raw = base32Encode(randomBytes(10)).toLowerCase();
+    return [0, 4, 8, 12].map((i) => raw.slice(i, i + 4)).join("-");
   });
 }
 

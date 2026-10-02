@@ -158,6 +158,7 @@ const resetMfaRoute = createRoute({
     200: jsonResponse(successSchema(z.null()), "2FA desactivado"),
     ...errorResponses({
       ...adminErrors,
+      403: "Requiere rol administrador, o el usuario es uno mismo (usa `POST /api/auth/mfa/disable`)",
       404: "Usuario no encontrado",
       409: "El usuario no tiene 2FA",
     }),
@@ -448,6 +449,16 @@ export const userRoutes = router
   .openapi(resetMfaRoute, async (c) => {
     const { id } = c.req.valid("param");
     const currentUser = c.get("user");
+
+    // Your own 2FA goes through /mfa/disable, which asks for the password and a code: an admin's
+    // stolen access token alone must not be enough to strip the admin's second factor
+    if (id === currentUser.userId) {
+      return errorResponse(
+        c,
+        "Use POST /api/auth/mfa/disable to turn off your own two-factor authentication.",
+        403,
+      );
+    }
 
     const target = await prisma.user.findUnique({ where: { id } });
     if (!target || target.deletedAt)
