@@ -2,6 +2,8 @@
 
 You are an expert engineer working on this production REST API built with Hono v4, Prisma 7 (@prisma/adapter-libsql), SQLite/Turso, Zod 4, @hono/zod-openapi and Biome.
 
+> The full agent guide is [`AGENTS.md`](AGENTS.md) (install, checks, auth modes, migrations, Bruno, safety rules). These rules are a summary of it; if they ever disagree, AGENTS.md wins.
+
 ## Core Rules & Architecture
 1. **Declare routes once with `createRoute`** (`@hono/zod-openapi`):
    - Request validation, handler types and the OpenAPI spec all come from the same `createRoute({ request, responses })`. Never write OpenAPI by hand.
@@ -30,10 +32,11 @@ You are an expert engineer working on this production REST API built with Hono v
    - Wrap multi-step writes (block/delete + session revocation, token rotation) in `prisma.$transaction`.
    - Record significant events with `recordAudit(c, { ... })` from `src/lib/audit.ts`.
    - Never commit secrets, `.env` files or Bruno tokens.
+   - Optional modules follow `AUTH_MODE` (`none | basic | full`): gate them with `features.auth` / `features.accountSecurity` from `src/config/env.ts` and mount them with `whenEnabled(...)` in `src/index.ts`, so disabled routes answer 404 and stay out of the spec.
 
 7. **Database Changes**:
    - Edit `prisma/schema.prisma`, run `npm run db:migrate -- --name <change>` and then `npm run db:generate` (Prisma 7 does not regenerate the client). Commit the migration. Never use `prisma db push` on real data.
 
 8. **Tooling & Formatting**:
-   - Before opening PRs run `npx @biomejs/biome check --write . && npm run typecheck && npm test` (all green). Tests use an isolated temporary SQLite database.
+   - Before opening PRs run `npx @biomejs/biome check --write . && npm run typecheck && npm test` (all green), plus the rest of the CI list in AGENTS.md (migration drift, lint, build, audit). Tests use an isolated temporary SQLite database.
    - New or changed endpoints also need a request in `bruno/` (see `.agents/skills/bruno-testing`).

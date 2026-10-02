@@ -19,11 +19,17 @@ import {
   otpauthUrl,
   verifyTotp,
 } from "../lib/totp.js";
-import { authMiddleware } from "../middleware/auth.js";
+import { authMiddleware, requireAdmin } from "../middleware/auth.js";
 import { rateLimiter } from "../middleware/rateLimit.js";
-import { mfaDisableSchema, mfaEnableSchema, mfaSetupSchema } from "../schemas/index.js";
+import {
+  idParamSchema,
+  mfaDisableSchema,
+  mfaEnableSchema,
+  mfaSetupSchema,
+} from "../schemas/index.js";
 import { successSchema } from "../schemas/responses.js";
 import { verifySecondFactor } from "../services/mfa.js";
+import { userSessionRevocationOps } from "../services/sessions.js";
 import { comparePassword } from "../utils/password.js";
 
 const router = createRouter();
@@ -211,3 +217,68 @@ export const mfaRoutes = router
     });
     return successResponse(c, null, { message: "Two-factor authentication disabled." });
   });
+
+// --- Admin reset, for users who lost their device -------------------------------------------
+// Mounted under /api/users (where the auth middleware applies) and, like the rest of this file,
+// only when AUTH_MODE=full.
+
+const resetMfaRoute = createRoute({
+  method: "delete",
+  path: "/{id}/mfa",
+  tags: ["Users"],
+  summary: "Desactivar el 2FA de un usuario (Solo Admin)",
+  description:
+    "Para quien perdió su dispositivo y sus códigos de recuperación. Borra el secreto y los códigos, y cierra todas las sesiones del usuario.",
+  security: secured,
+  middleware: [requireAdmin] as const,
+  request: { params: idParamSchema },
+  responses: {
+    200: jsonResponse(successSchema(z.null()), "2FA desactivado"),
+    ...errorResponses({
+      401: "Token ausente, inválido o sesión revocada",
+      403: "Requiere rol administrador, o el usuario es uno mismo (usa `POST /api/auth/mfa/disable`)",
+      404: "Usuario no encontrado",
+      409: "El usuario no tiene 2FA",
+    }),
+  },
+});
+
+/** DELETE /api/users/:id/mfa */
+export const userMfaRoutes = createRouter().openapi(resetMfaRoute, async (c) => {
+  const { id } = c.req.valid("param");
+  const currentUser = c.get("user");
+
+  // Your own 2FA goes through /mfa/disable, which asks for the password and a code: an admin's
+  // stolen access token alone must not be enough to strip the admin's second factor
+  if (id === currentUser.userId) {
+    return errorResponse(
+      c,
+      "Use POST /api/auth/mfa/disable to turn off your own two-factor authentication.",
+      403,
+    );
+  }
+
+  const target = await prisma.user.findUnique({ where: { id } });
+  if (!target || target.deletedAt) return errorResponse(c, `User with ID '${id}' not found.`, 404);
+  if (!target.totpEnabledAt)
+    return errorResponse(c, "The user has no two-factor authentication.", 409);
+
+  await prisma.$transaction([
+    prisma.user.update({
+      where: { id },
+      data: { totpSecret: null, totpEnabledAt: null, totpLastStep: null },
+    }),
+    prisma.recoveryCode.deleteMany({ where: { userId: id } }),
+    ...userSessionRevocationOps(id),
+  ]);
+
+  await recordAudit(c, {
+    userId: currentUser.userId,
+    action: "MFA_RESET",
+    entity: "User",
+    entityId: id,
+  });
+  return successResponse(c, null, {
+    message: "Two-factor authentication removed and sessions revoked.",
+  });
+});

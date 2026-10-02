@@ -96,16 +96,18 @@ model RefreshToken {
   @@index([sessionId])
 }
 
+/// Example resource. Owned by a user with AUTH_MODE=basic/full; ownerless (userId null, public)
+/// with AUTH_MODE=none. Ownerless tasks are never visible to regular users in the auth modes.
 model Task {
   id          String    @id @default(uuid())
-  userId      String
+  userId      String?
   title       String
   description String    @default("")
   completed   Boolean   @default(false)
   deletedAt   DateTime? // Soft delete timestamp
   createdAt   DateTime  @default(now())
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, deletedAt])
 }

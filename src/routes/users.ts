@@ -6,7 +6,7 @@
  */
 
 import { createRoute, z } from "@hono/zod-openapi";
-import { env } from "../config/env.js";
+import { env, features } from "../config/env.js";
 import { prisma } from "../db.js";
 import type { UserWhereInput } from "../generated/client/models.js";
 import { recordAudit } from "../lib/audit.js";
@@ -140,27 +140,6 @@ const roleRoute = createRoute({
       ...adminErrors,
       404: "Usuario no encontrado",
       409: "Es el último administrador activo",
-    }),
-  },
-});
-
-const resetMfaRoute = createRoute({
-  method: "delete",
-  path: "/{id}/mfa",
-  tags: ["Users"],
-  summary: "Desactivar el 2FA de un usuario (Solo Admin)",
-  description:
-    "Para quien perdió su dispositivo y sus códigos de recuperación. Borra el secreto y los códigos, y cierra todas las sesiones del usuario.",
-  security: secured,
-  middleware: [requireAdmin] as const,
-  request: { params: idParamSchema },
-  responses: {
-    200: jsonResponse(successSchema(z.null()), "2FA desactivado"),
-    ...errorResponses({
-      ...adminErrors,
-      403: "Requiere rol administrador, o el usuario es uno mismo (usa `POST /api/auth/mfa/disable`)",
-      404: "Usuario no encontrado",
-      409: "El usuario no tiene 2FA",
     }),
   },
 });
@@ -443,49 +422,6 @@ export const userRoutes = router
     });
   })
   /**
-   * DELETE /api/users/:id/mfa
-   * Admin reset of a user's two-factor authentication (lost device).
-   */
-  .openapi(resetMfaRoute, async (c) => {
-    const { id } = c.req.valid("param");
-    const currentUser = c.get("user");
-
-    // Your own 2FA goes through /mfa/disable, which asks for the password and a code: an admin's
-    // stolen access token alone must not be enough to strip the admin's second factor
-    if (id === currentUser.userId) {
-      return errorResponse(
-        c,
-        "Use POST /api/auth/mfa/disable to turn off your own two-factor authentication.",
-        403,
-      );
-    }
-
-    const target = await prisma.user.findUnique({ where: { id } });
-    if (!target || target.deletedAt)
-      return errorResponse(c, `User with ID '${id}' not found.`, 404);
-    if (!target.totpEnabledAt)
-      return errorResponse(c, "The user has no two-factor authentication.", 409);
-
-    await prisma.$transaction([
-      prisma.user.update({
-        where: { id },
-        data: { totpSecret: null, totpEnabledAt: null, totpLastStep: null },
-      }),
-      prisma.recoveryCode.deleteMany({ where: { userId: id } }),
-      ...userSessionRevocationOps(id),
-    ]);
-
-    await recordAudit(c, {
-      userId: currentUser.userId,
-      action: "MFA_RESET",
-      entity: "User",
-      entityId: id,
-    });
-    return successResponse(c, null, {
-      message: "Two-factor authentication removed and sessions revoked.",
-    });
-  })
-  /**
    * POST /api/users/:id/revoke-sessions
    * Revokes all active sessions for a target user (User self-service or Admin).
    */
@@ -595,7 +531,7 @@ export const userRoutes = router
       updatedUser = await updateOp;
     }
 
-    if (emailChanging && env.MAIL_TRANSPORT !== "none") {
+    if (emailChanging && features.accountSecurity && env.MAIL_TRANSPORT !== "none") {
       inBackground(() => sendVerificationEmail(updatedUser));
     }
 
