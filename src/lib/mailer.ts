@@ -7,7 +7,9 @@
  * - `memory` : kept in `outbox` (tests only)
  */
 
-import nodemailer, { type Transporter } from "nodemailer";
+// Types only: nodemailer itself is loaded lazily, the first time an SMTP message is sent, so
+// AUTH_MODE=basic/none (or MAIL_TRANSPORT other than smtp) never load it at runtime
+import type { Transporter } from "nodemailer";
 import { env } from "../config/env.js";
 import { logger } from "./logger.js";
 
@@ -42,7 +44,7 @@ export async function sendMail(message: MailMessage): Promise<boolean> {
         outbox.push(message);
         return true;
       case "smtp":
-        smtp ??= nodemailer.createTransport(env.SMTP_URL);
+        smtp ??= (await import("nodemailer")).default.createTransport(env.SMTP_URL);
         await smtp.sendMail({ from: env.MAIL_FROM, ...message });
         return true;
     }

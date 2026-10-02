@@ -10,6 +10,9 @@ services:
     environment:
       - PORT=3011
       - NODE_ENV=production
+      # none | basic | full (vacío = full). Con AUTH_MODE=none los secretos JWT no se usan, pero
+      # Compose los sigue exigiendo: define cualquier valor o quita esas dos líneas.
+      - AUTH_MODE=${AUTH_MODE:-}
       # Los secretos NUNCA se versionan: se leen del entorno o de un archivo .env local (ignorado por git).
       # Genera valores seguros con: openssl rand -base64 48
       - JWT_SECRET=${JWT_SECRET:?Define JWT_SECRET en el entorno o en .env}

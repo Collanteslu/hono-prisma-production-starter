@@ -53,3 +53,12 @@ export function errorResponses<const T extends Record<number, string>>(defs: T) 
 export const jsonBody = <T extends z.ZodType>(schema: T) => ({
   body: { required: true, content: { "application/json": { schema } } },
 });
+
+/**
+ * Returns the router when its module is enabled (see AUTH_MODE), or an empty router otherwise.
+ * Mounting the empty router adds no route and nothing to the OpenAPI spec (its paths answer 404),
+ * while the chained `app.route(...)` expression keeps its full type for `hc<AppType>`.
+ */
+export function whenEnabled<T>(enabled: boolean, router: T): T {
+  return enabled ? router : (createRouter() as unknown as T);
+}

@@ -6,7 +6,7 @@
 
 import { createRoute } from "@hono/zod-openapi";
 import { verify } from "hono/jwt";
-import { env } from "../config/env.js";
+import { env, features } from "../config/env.js";
 import { prisma } from "../db.js";
 import { recordAudit } from "../lib/audit.js";
 import { getClientIp } from "../lib/clientIp.js";
@@ -140,7 +140,10 @@ export const authRoutes = router
       entityId: newUser.id,
     });
 
-    if (env.MAIL_TRANSPORT !== "none") inBackground(() => sendVerificationEmail(newUser));
+    // Email verification is part of AUTH_MODE=full only
+    if (features.accountSecurity && env.MAIL_TRANSPORT !== "none") {
+      inBackground(() => sendVerificationEmail(newUser));
+    }
 
     return successResponse(c, newUser, {
       status: 201,
