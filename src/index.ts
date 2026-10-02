@@ -198,6 +198,15 @@ app.get("/", (c) => {
         login: "POST /api/auth/login",
         refresh: "POST /api/auth/refresh",
         logout: "POST /api/auth/logout",
+        forgotPassword: "POST /api/auth/forgot-password",
+        resetPassword: "POST /api/auth/reset-password",
+        verifyEmail: "POST /api/auth/verify-email",
+        resendVerification: "POST /api/auth/resend-verification",
+      },
+      mfa: {
+        setup: "POST /api/auth/mfa/setup",
+        enable: "POST /api/auth/mfa/enable",
+        disable: "POST /api/auth/mfa/disable",
       },
       sessions: {
         mySessions: "GET /api/sessions/me",
@@ -208,6 +217,7 @@ app.get("/", (c) => {
         crud: "GET, POST, PUT, DELETE /api/users",
         blockUser: "PATCH /api/users/:id/block",
         revokeAllUserSessions: "POST /api/users/:id/revoke-sessions",
+        resetUserMfa: "DELETE /api/users/:id/mfa",
       },
       tasks: "GET, POST, PUT, DELETE /api/tasks",
       restoreTask: "POST /api/tasks/:id/restore",
