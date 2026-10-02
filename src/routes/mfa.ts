@@ -53,7 +53,7 @@ const setupRoute = createRoute({
     ...errorResponses({
       400: "Error de validación",
       ...authErrors,
-      403: "Contraseña incorrecta",
+      403: "Contraseña incorrecta, o cuenta suspendida",
       409: "El 2FA ya está activo",
     }),
   },
@@ -76,6 +76,7 @@ const enableRoute = createRoute({
     ...errorResponses({
       400: "Código inválido",
       ...authErrors,
+      403: "Cuenta suspendida",
       409: "No hay un alta pendiente o ya está activo",
     }),
   },
@@ -94,7 +95,7 @@ const disableRoute = createRoute({
     ...errorResponses({
       400: "Error de validación",
       ...authErrors,
-      403: "Contraseña o código incorrectos",
+      403: "Contraseña o código incorrectos, o cuenta suspendida",
       409: "El 2FA no está activo",
     }),
   },

@@ -65,9 +65,10 @@ hono-prisma-production-starter/
 │   ├── bruno.json                    # Collection metadata
 │   ├── collection.bru                # Global `Authorization: Bearer {{token}}` header
 │   ├── environments/Local.bru        # Only `baseUrl` (tokens are never stored on disk)
-│   ├── Auth/                         # Register, Login Admin, Login User, Refresh Token, Logout
+│   ├── Auth/                         # Register, Login Admin, Login User, Refresh Token, Logout,
+│   │                                 # Forgot/Reset Password, Verify Email, Resend Verification, MFA Setup/Enable/Disable
 │   ├── Sessions/                     # My Sessions, Revoke Session, Revoke All Sessions
-│   ├── Users/                        # List/Get/Create/Update/Delete, Block/Unblock, Revoke User Sessions
+│   ├── Users/                        # List/Get/Create/Update/Delete, Block/Unblock, Revoke User Sessions, Reset User MFA
 │   ├── Tasks/                        # List/Get/Create/Update/Delete, Restore Task
 │   └── Audit/                        # List Audit Logs
 ├── src/
