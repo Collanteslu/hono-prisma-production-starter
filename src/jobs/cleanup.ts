@@ -1,6 +1,7 @@
 /**
  * @file cleanup.ts
- * @description Background garbage collection task that purges expired sessions and stale refresh tokens.
+ * @description Background garbage collection task that purges expired sessions, stale refresh tokens,
+ * emailed tokens, used MFA recovery codes, ended rate-limit windows and old audit entries.
  * Keeps the SQLite database performant and prevents storage bloat.
  */
 
@@ -10,6 +11,8 @@ import { logger } from "../lib/logger.js";
 import { purgeExpiredBuckets } from "../lib/rateLimitStore.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+/** Days a used MFA recovery code is kept (for inspection) before it is purged */
+const USED_RECOVERY_CODE_RETENTION_DAYS = 30;
 
 /**
  * Executes a cleanup cycle deleting expired sessions and tokens.
@@ -49,6 +52,18 @@ export async function cleanupExpiredSessions(): Promise<{
 
     // 3. Purge ended rate-limit windows and audit entries past the retention period
     const deletedBuckets = await purgeExpiredBuckets();
+    // Emailed tokens past their expiry (or used more than a day ago) are of no further use
+    await prisma.authToken.deleteMany({
+      where: {
+        OR: [{ expiresAt: { lt: now } }, { usedAt: { lt: new Date(now.getTime() - DAY_MS) } }],
+      },
+    });
+    // Used MFA recovery codes can never work again; unused ones stay until 2FA is reset
+    await prisma.recoveryCode.deleteMany({
+      where: {
+        usedAt: { lt: new Date(now.getTime() - USED_RECOVERY_CODE_RETENTION_DAYS * DAY_MS) },
+      },
+    });
     const deletedAuditLogs =
       env.AUDIT_RETENTION_DAYS > 0
         ? (

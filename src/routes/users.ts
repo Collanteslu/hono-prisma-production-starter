@@ -6,6 +6,7 @@
  */
 
 import { createRoute, z } from "@hono/zod-openapi";
+import { env, features } from "../config/env.js";
 import { prisma } from "../db.js";
 import type { UserWhereInput } from "../generated/client/models.js";
 import { recordAudit } from "../lib/audit.js";
@@ -25,6 +26,8 @@ import {
   userQuerySchema,
 } from "../schemas/index.js";
 import { successSchema, userSchema } from "../schemas/responses.js";
+import { inBackground, sendVerificationEmail } from "../services/accountMail.js";
+import { deletePendingAuthTokensOp } from "../services/authTokens.js";
 import { revokeUserSessions, userSessionRevocationOps } from "../services/sessions.js";
 import { comparePassword, hashPassword } from "../utils/password.js";
 
@@ -475,8 +478,10 @@ export const userRoutes = router
     }
 
     // A stolen access token must not be enough to take over the account: changing your own
-    // password requires proving you know the current one (admins resetting others are exempt).
-    if (password && currentUser.userId === id) {
+    // password or email (the password-reset address) requires the current password. Admins
+    // modifying someone else are exempt.
+    const emailChanging = Boolean(email && email !== existingUser.email);
+    if ((password || emailChanging) && currentUser.userId === id) {
       const stored = await prisma.user.findUnique({
         where: { id },
         omit: { password: false },
@@ -499,26 +504,35 @@ export const userRoutes = router
       where: { id },
       data: {
         ...(name && { name }),
-        ...(email && { email }),
+        // A new address starts unverified
+        ...(emailChanging && { email, emailVerifiedAt: null }),
         ...(password && { password: await hashPassword(password) }),
       },
     });
 
     // A password change invalidates every other session (keep the caller's own session alive).
-    // Both happen in one transaction: the new password never lands without the revocation.
+    // A password or email change also deletes every pending emailed token (reset / verification
+    // links sent before it must not survive it). All of it runs in one transaction.
     let updatedUser: Awaited<typeof updateOp>;
     let revokedSessionsCount = 0;
     if (password) {
-      const [user, revoked] = await prisma.$transaction([
+      const [user, , revoked] = await prisma.$transaction([
         updateOp,
+        deletePendingAuthTokensOp(id),
         ...userSessionRevocationOps(id, {
           exceptSessionId: currentUser.userId === id ? currentUser.sessionId : undefined,
         }),
       ]);
       updatedUser = user;
       revokedSessionsCount = revoked.count;
+    } else if (emailChanging) {
+      [updatedUser] = await prisma.$transaction([updateOp, deletePendingAuthTokensOp(id)]);
     } else {
       updatedUser = await updateOp;
+    }
+
+    if (emailChanging && features.accountSecurity && env.MAIL_TRANSPORT !== "none") {
+      inBackground(() => sendVerificationEmail(updatedUser));
     }
 
     await recordAudit(c, {

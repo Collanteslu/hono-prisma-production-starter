@@ -23,7 +23,9 @@ bruno/
 ├── collection.bru                # Global headers: Authorization: Bearer {{token}}
 ├── environments/
 │   └── Local.bru                 # baseUrl only: http://localhost:3011
-├── Auth/                         # Register, Login Admin, Login User, Refresh Token, Logout
+├── Auth/                         # Register, Login Admin, Login User, Refresh Token, Logout,
+│                                 # Forgot/Reset Password, Verify Email, Resend Verification,
+│                                 # MFA Setup/Enable/Disable (these only exist with AUTH_MODE=full)
 ├── Sessions/
 ├── Users/
 ├── Tasks/

@@ -16,12 +16,12 @@ import { prettyJSON } from "hono/pretty-json";
 import { secureHeaders } from "hono/secure-headers";
 
 // Environment configuration and database client
-import { env } from "./config/env.js";
+import { env, features } from "./config/env.js";
 import { prisma, seedDatabase } from "./db.js";
 import { Prisma } from "./generated/client/client.js";
 import { startCleanupJob } from "./jobs/cleanup.js";
 import { logger as appLogger } from "./lib/logger.js";
-import { createRouter, jsonResponse } from "./lib/openapi.js";
+import { createRouter, jsonResponse, whenEnabled } from "./lib/openapi.js";
 import { errorResponse } from "./lib/response.js";
 import { API_VERSION } from "./lib/version.js";
 // Middlewares
@@ -30,6 +30,8 @@ import { requestIdMiddleware } from "./middleware/requestId.js";
 import { auditRoutes } from "./routes/audit.js";
 // Route modules
 import { authRoutes } from "./routes/auth.js";
+import { mfaRoutes, userMfaRoutes } from "./routes/mfa.js";
+import { recoveryRoutes } from "./routes/recovery.js";
 import { sessionRoutes } from "./routes/sessions.js";
 import { taskRoutes } from "./routes/tasks.js";
 import { userRoutes } from "./routes/users.js";
@@ -40,13 +42,16 @@ import { healthResponseSchema } from "./schemas/responses.js";
  */
 const app = createRouter();
 
-// Bearer JWT scheme referenced by every protected route (`security: [{ BearerAuth: [] }]`)
-app.openAPIRegistry.registerComponent("securitySchemes", "BearerAuth", {
-  type: "http",
-  scheme: "bearer",
-  bearerFormat: "JWT",
-  description: "Access Token JWT obtenido en POST /api/auth/login",
-});
+// Bearer JWT scheme referenced by every protected route (`security: [{ BearerAuth: [] }]`).
+// AUTH_MODE=none has no protected route, so the scheme is not published either.
+if (features.auth) {
+  app.openAPIRegistry.registerComponent("securitySchemes", "BearerAuth", {
+    type: "http",
+    scheme: "bearer",
+    bearerFormat: "JWT",
+    description: "Access Token JWT obtenido en POST /api/auth/login",
+  });
+}
 
 /**
  * -------------------------------------------------------------
@@ -107,16 +112,18 @@ if (env.ENABLE_DOCS ?? env.NODE_ENV !== "production") {
     info: {
       title: "Hono REST API - Gestión de Usuarios y Tareas",
       version: API_VERSION,
-      description:
-        "API REST con Hono, Prisma 7 (SQLite), TypeScript, Zod, autenticación JWT con refresh tokens rotativos, sesiones con estado y rate limiting.",
+      description: features.auth
+        ? `API REST con Hono, Prisma 7 (SQLite), TypeScript, Zod, autenticación JWT con refresh tokens rotativos, sesiones con estado y rate limiting (AUTH_MODE=${env.AUTH_MODE}).`
+        : "API REST con Hono, Prisma 7 (SQLite), TypeScript y Zod, sin autenticación (AUTH_MODE=none): todas las rutas son públicas.",
     },
     servers: [{ url: `http://localhost:${env.PORT}`, description: "Servidor local" }],
+    // Only the tags of the mounted modules
     tags: [
-      { name: "Auth" },
-      { name: "Sessions" },
-      { name: "Users" },
+      ...(features.auth ? [{ name: "Auth" }] : []),
+      ...(features.accountSecurity ? [{ name: "MFA" }] : []),
+      ...(features.auth ? [{ name: "Sessions" }, { name: "Users" }] : []),
       { name: "Tasks" },
-      { name: "Audit" },
+      ...(features.auth ? [{ name: "Audit" }] : []),
       { name: "System" },
     ],
   });
@@ -180,35 +187,54 @@ app.openapi(healthRoute, async (c) => {
   }
 });
 
-// Root welcome and overview endpoint
+// Root welcome and overview endpoint: lists only the endpoints mounted for the current AUTH_MODE
 app.get("/", (c) => {
   return c.json({
     status: "online",
     name: "Production REST API Template with Hono, Prisma 7, SQLite & Stateful Sessions",
     version: API_VERSION,
+    authMode: env.AUTH_MODE,
     documentationUrl: "/docs",
     endpoints: {
       healthcheck: "/healthz",
       documentation: "/docs",
-      auth: {
-        register: "POST /api/auth/register",
-        login: "POST /api/auth/login",
-        refresh: "POST /api/auth/refresh",
-        logout: "POST /api/auth/logout",
-      },
-      sessions: {
-        mySessions: "GET /api/sessions/me",
-        revokeSession: "DELETE /api/sessions/:sessionId",
-        revokeAll: "POST /api/sessions/revoke-all",
-      },
-      users: {
-        crud: "GET, POST, PUT, DELETE /api/users",
-        blockUser: "PATCH /api/users/:id/block",
-        revokeAllUserSessions: "POST /api/users/:id/revoke-sessions",
-      },
+      ...(features.auth && {
+        auth: {
+          register: "POST /api/auth/register",
+          login: "POST /api/auth/login",
+          refresh: "POST /api/auth/refresh",
+          logout: "POST /api/auth/logout",
+          ...(features.accountSecurity && {
+            forgotPassword: "POST /api/auth/forgot-password",
+            resetPassword: "POST /api/auth/reset-password",
+            verifyEmail: "POST /api/auth/verify-email",
+            resendVerification: "POST /api/auth/resend-verification",
+          }),
+        },
+      }),
+      ...(features.accountSecurity && {
+        mfa: {
+          setup: "POST /api/auth/mfa/setup",
+          enable: "POST /api/auth/mfa/enable",
+          disable: "POST /api/auth/mfa/disable",
+        },
+      }),
+      ...(features.auth && {
+        sessions: {
+          mySessions: "GET /api/sessions/me",
+          revokeSession: "DELETE /api/sessions/:sessionId",
+          revokeAll: "POST /api/sessions/revoke-all",
+        },
+        users: {
+          crud: "GET, POST, PUT, DELETE /api/users",
+          blockUser: "PATCH /api/users/:id/block",
+          revokeAllUserSessions: "POST /api/users/:id/revoke-sessions",
+          ...(features.accountSecurity && { resetUserMfa: "DELETE /api/users/:id/mfa" }),
+        },
+      }),
       tasks: "GET, POST, PUT, DELETE /api/tasks",
       restoreTask: "POST /api/tasks/:id/restore",
-      auditLogs: "GET /api/audit-logs",
+      ...(features.auth && { auditLogs: "GET /api/audit-logs" }),
     },
   });
 });
@@ -218,23 +244,31 @@ app.get("/", (c) => {
  * Route Module Mounting
  * -------------------------------------------------------------
  */
-// Apply authentication middleware to protected route paths
-// Both the exact prefix and its sub-paths are protected
-for (const prefix of ["/api/sessions", "/api/users", "/api/tasks", "/api/audit-logs"]) {
-  app.use(prefix, authMiddleware);
-  app.use(`${prefix}/*`, authMiddleware);
+// Apply authentication middleware to protected route paths (both the exact prefix and its
+// sub-paths). With AUTH_MODE=none nothing is protected: the remaining routes are public.
+if (features.auth) {
+  for (const prefix of ["/api/sessions", "/api/users", "/api/tasks", "/api/audit-logs"]) {
+    app.use(prefix, authMiddleware);
+    app.use(`${prefix}/*`, authMiddleware);
+  }
 }
 
-// Public authentication routes and protected resource modules chained cleanly for Hono RPC
+// Route modules chained cleanly for Hono RPC. Modules disabled by AUTH_MODE are mounted as empty
+// routers (see whenEnabled): their paths answer 404 and are absent from /openapi.json.
+//   basic: auth, sessions, users, audit | full: basic + recovery/verification and MFA
 const routes = app
-  .route("/api/auth", authRoutes)
-  .route("/api/sessions", sessionRoutes)
-  .route("/api/users", userRoutes)
+  .route("/api/auth", whenEnabled(features.auth, authRoutes))
+  .route("/api/auth", whenEnabled(features.accountSecurity, recoveryRoutes))
+  .route("/api/auth", whenEnabled(features.accountSecurity, mfaRoutes))
+  .route("/api/sessions", whenEnabled(features.auth, sessionRoutes))
+  .route("/api/users", whenEnabled(features.auth, userRoutes))
+  .route("/api/users", whenEnabled(features.accountSecurity, userMfaRoutes))
   .route("/api/tasks", taskRoutes)
-  .route("/api/audit-logs", auditRoutes);
+  .route("/api/audit-logs", whenEnabled(features.auth, auditRoutes));
 
 /**
- * Export Type-Safe RPC Application Type for client consumption (hc<AppType>)
+ * Export Type-Safe RPC Application Type for client consumption (hc<AppType>).
+ * It always describes the full build (AUTH_MODE=full); routes of disabled modules answer 404.
  */
 export type AppType = typeof routes;
 

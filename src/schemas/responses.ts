@@ -58,7 +58,9 @@ export const successSchema = <T extends z.ZodType>(data: T) =>
 export const taskSchema = z
   .object({
     id: z.string(),
-    userId: z.string(),
+    userId: z.string().nullable().openapi({
+      description: "Dueño de la tarea (null en las tareas públicas creadas con `AUTH_MODE=none`)",
+    }),
     title: z.string(),
     description: z.string(),
     completed: z.boolean(),
@@ -66,8 +68,9 @@ export const taskSchema = z
     createdAt: dateTime,
     user: z
       .object({ id: z.string(), name: z.string(), email: z.string(), role: roleSchema })
+      .nullable()
       .optional()
-      .openapi({ description: "Presente con `?include=user`" }),
+      .openapi({ description: "Presente con `?include=user` (null si la tarea no tiene dueño)" }),
   })
   .openapi("Task");
 
@@ -94,6 +97,10 @@ export const userSchema = z
     blockedReason: z.string().nullable(),
     deletedAt: nullableDateTime,
     createdAt: dateTime,
+    emailVerifiedAt: nullableDateTime,
+    totpEnabledAt: nullableDateTime.openapi({
+      description: "Fecha de activación del 2FA (null si está desactivado)",
+    }),
     tasks: z.array(taskSchema.omit({ user: true })).optional(),
     sessions: z.array(sessionSchema).optional(),
   })

@@ -21,33 +21,42 @@ const emailField = (formatMessage: string) =>
  */
 const passwordField = z
   .string()
-  .min(8, { message: "La contraseña debe tener al menos 8 caracteres" })
-  .max(72, { message: "La contraseña no puede exceder 72 caracteres" })
+  .min(8, { message: "Password must be at least 8 characters long" })
+  .max(72, { message: "Password cannot exceed 72 characters" })
   .refine((value) => Buffer.byteLength(value, "utf8") <= 72, {
-    message:
-      "La contraseña no puede exceder 72 bytes (los caracteres acentuados y emoji ocupan más de uno)",
+    message: "Password cannot exceed 72 bytes (accented characters and emoji take more than one)",
   })
   .openapi({ example: "password123" });
 
 const nameField = z
   .string()
   .trim()
-  .min(2, { message: "El nombre debe tener al menos 2 caracteres" })
-  .max(50, { message: "El nombre no puede exceder 50 caracteres" })
+  .min(2, { message: "Name must be at least 2 characters long" })
+  .max(50, { message: "Name cannot exceed 50 characters" })
   .openapi({ example: "Ana García" });
+
+const totpCodeField = z.string().regex(/^\d{6}$/, { message: "Code must be 6 digits" });
+const recoveryCodeField = z.string().min(5).max(32);
+const emailTokenField = z.string().min(20).max(200).openapi({ example: "Zm9vYmFy..." });
 
 /**
  * Esquema de validación para el inicio de sesión.
  */
 export const loginSchema = z
   .object({
-    email: emailField("El formato del correo electrónico no es válido"),
+    email: emailField("Invalid email format"),
     // No se aplica la política de contraseñas en el login para no bloquear cuentas existentes
     password: z
       .string()
-      .min(1, { message: "La contraseña es obligatoria" })
+      .min(1, { message: "Password is required" })
       .max(200)
       .openapi({ example: "password123" }),
+    totpCode: totpCodeField.optional().openapi({
+      description: "Código de 6 dígitos de la app autenticadora (solo si la cuenta tiene 2FA)",
+    }),
+    recoveryCode: recoveryCodeField.optional().openapi({
+      description: "Código de recuperación de un solo uso (alternativa a `totpCode`)",
+    }),
   })
   .openapi("LoginRequest");
 
@@ -57,10 +66,48 @@ export const loginSchema = z
 export const registerSchema = z
   .object({
     name: nameField,
-    email: emailField("El formato de email no es válido"),
+    email: emailField("Invalid email format"),
     password: passwordField,
   })
   .openapi("RegisterRequest");
+
+/** Solicitud de recuperación de contraseña */
+export const forgotPasswordSchema = z
+  .object({ email: emailField("Invalid email format") })
+  .openapi("ForgotPasswordRequest");
+
+/** Restablecimiento de contraseña con el token recibido por email */
+export const resetPasswordSchema = z
+  .object({ token: emailTokenField, password: passwordField })
+  .openapi("ResetPasswordRequest");
+
+/** Verificación de email con el token recibido */
+export const verifyEmailSchema = z.object({ token: emailTokenField }).openapi("VerifyEmailRequest");
+
+/** Reenvío del email de verificación */
+export const resendVerificationSchema = z
+  .object({ email: emailField("Invalid email format") })
+  .openapi("ResendVerificationRequest");
+
+/** Inicio del alta de 2FA (exige la contraseña para que un token robado no pueda enrolar un factor) */
+export const mfaSetupSchema = z
+  .object({ currentPassword: z.string().min(1).max(200) })
+  .openapi("MfaSetupRequest");
+
+/** Confirmación del alta de 2FA con un primer código */
+export const mfaEnableSchema = z.object({ code: totpCodeField }).openapi("MfaEnableRequest");
+
+/** Desactivación de 2FA: contraseña + un código o un código de recuperación */
+export const mfaDisableSchema = z
+  .object({
+    currentPassword: z.string().min(1).max(200),
+    code: totpCodeField.optional(),
+    recoveryCode: recoveryCodeField.optional(),
+  })
+  .refine((data) => Boolean(data.code) !== Boolean(data.recoveryCode), {
+    message: "Provide either code or recoveryCode",
+  })
+  .openapi("MfaDisableRequest");
 
 /**
  * Esquema para renovar el Access Token con Refresh Token.
@@ -105,7 +152,7 @@ export const changeRoleSchema = z
 export const createUserSchema = z
   .object({
     name: nameField,
-    email: emailField("El formato de email no es válido"),
+    email: emailField("Invalid email format"),
     password: passwordField,
     role: z.enum(["admin", "user"]).optional().default("user"),
   })
@@ -117,16 +164,16 @@ export const createUserSchema = z
 export const updateUserSchema = z
   .object({
     name: nameField.optional(),
-    email: emailField("Formato de email inválido").optional(),
+    email: emailField("Invalid email format").optional(),
     password: passwordField.optional(),
     currentPassword: z.string().min(1).max(200).optional().openapi({
       description:
-        "Contraseña actual. Obligatoria al cambiar la propia contraseña; un admin que restablece la de otro usuario no la necesita.",
+        "Contraseña actual. Obligatoria al cambiar la propia contraseña o el propio email; un admin que modifica a otro usuario no la necesita.",
       example: "password123",
     }),
   })
   .refine((data) => Object.keys(data).length > 0, {
-    message: "Debes proporcionar al menos un campo para actualizar (name, email o password)",
+    message: "Provide at least one field to update (name, email or password)",
   })
   .openapi("UpdateUserRequest");
 
@@ -137,12 +184,12 @@ export const createTaskSchema = z
   .object({
     title: z
       .string()
-      .min(3, { message: "El título debe tener al menos 3 caracteres" })
-      .max(100, { message: "El título no puede exceder 100 caracteres" })
+      .min(3, { message: "Title must be at least 3 characters long" })
+      .max(100, { message: "Title cannot exceed 100 characters" })
       .openapi({ example: "Diseñar interfaz frontend" }),
     description: z
       .string()
-      .max(2000, { message: "La descripción no puede exceder 2000 caracteres" })
+      .max(2000, { message: "Description cannot exceed 2000 characters" })
       .optional()
       .default(""),
     completed: z.boolean().optional().default(false),
@@ -159,8 +206,7 @@ export const updateTaskSchema = z
     completed: z.boolean().optional(),
   })
   .refine((data) => Object.keys(data).length > 0, {
-    message:
-      "Debes proporcionar al menos un campo para actualizar (title, description o completed)",
+    message: "Provide at least one field to update (title, description or completed)",
   })
   .openapi("UpdateTaskRequest");
 
@@ -186,6 +232,12 @@ export const taskQuerySchema = z.object({
   ...listParams,
   completed: z.enum(["true", "false"]).optional(),
   sortBy: z.enum(["createdAt", "title"]).default("createdAt"),
+  userId: z.string().min(1).max(100).optional().openapi({
+    description: "Solo Admin: lista las tareas de ese usuario en lugar de las propias",
+  }),
+  scope: z.enum(["own", "all"]).default("own").openapi({
+    description: "Solo Admin: `all` lista las tareas de todos los usuarios",
+  }),
 });
 
 /**

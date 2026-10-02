@@ -6,7 +6,7 @@
 
 import path from "node:path";
 import { PrismaLibSql } from "@prisma/adapter-libsql";
-import { env } from "./config/env.js";
+import { env, features } from "./config/env.js";
 import { PrismaClient } from "./generated/client/client.js";
 import { logger } from "./lib/logger.js";
 import { hashPassword } from "./utils/password.js";
@@ -41,8 +41,12 @@ const adapter = new PrismaLibSql({
   timeout: 5000,
 });
 
-// Password hashes are omitted from every query by default; opt in explicitly with `omit: { password: false }`.
-export const prisma = new PrismaClient({ adapter, omit: { user: { password: true } } });
+// Password hashes and MFA secrets are omitted from every query by default; opt in explicitly,
+// e.g. `omit: { password: false }`.
+export const prisma = new PrismaClient({
+  adapter,
+  omit: { user: { password: true, totpSecret: true, totpLastStep: true } },
+});
 
 /**
  * Database seeder executed during application startup.
@@ -50,6 +54,27 @@ export const prisma = new PrismaClient({ adapter, omit: { user: { password: true
  * Security: Disabled in production to prevent hardcoded demo credentials.
  */
 export async function seedDatabase() {
+  // AUTH_MODE=none has no users: outside production, seed a couple of public example tasks
+  if (!features.auth) {
+    if (env.NODE_ENV === "production") return;
+    if ((await prisma.task.count({ where: { userId: null } })) === 0) {
+      await prisma.task.createMany({
+        data: [
+          {
+            title: "Explore the public API",
+            description: "AUTH_MODE=none: every route is public and tasks have no owner.",
+          },
+          {
+            title: "Turn authentication on",
+            description: "Set AUTH_MODE=basic or full to add users, sessions and roles.",
+          },
+        ],
+      });
+      logger.info("🌱 AUTH_MODE=none: seeded public example tasks");
+    }
+    return;
+  }
+
   const usersCount = await prisma.user.count();
 
   // In production, optionally bootstrap the primary administrator if environment credentials are provided
@@ -63,6 +88,7 @@ export async function seedDatabase() {
           email: env.ADMIN_EMAIL.toLowerCase(),
           password: hashedPassword,
           role: "admin",
+          emailVerifiedAt: new Date(),
         },
       });
       logger.info("✔ Production administrator created successfully.");
@@ -85,6 +111,7 @@ export async function seedDatabase() {
         email: "admin@example.com",
         password: hashedPassword,
         role: "admin",
+        emailVerifiedAt: new Date(),
         tasks: {
           create: [
             {
@@ -112,6 +139,7 @@ export async function seedDatabase() {
         email: "ana@example.com",
         password: hashedPassword,
         role: "user",
+        emailVerifiedAt: new Date(),
         tasks: {
           create: [
             {
