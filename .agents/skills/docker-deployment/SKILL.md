@@ -38,6 +38,9 @@ EOF
 
 In production the app also refuses to boot with secrets shorter than 32 characters or identical to each other.
 
+### Authentication level
+Add `AUTH_MODE=none|basic|full` to the env file to choose the authentication level (empty = `full`; see the README "Authentication Modes"). Compose forwards it. With `AUTH_MODE=none` the JWT secrets are unused but Compose still requires them: set any value or remove those two lines from your copy of `docker-compose.yml`. With `full` and real emails (`MAIL_TRANSPORT=smtp`), production also needs `SMTP_URL` and an https `APP_URL`.
+
 ### Starting, inspecting, stopping
 ```bash
 docker compose --env-file .env.production up -d --build
@@ -46,7 +49,7 @@ curl -i http://localhost:3011/healthz
 docker compose --env-file .env.production down
 ```
 
-Optional variables (`ENABLE_DOCS`, `LOG_LEVEL`, rate limits, `TRUST_PROXY`, `CORS_ORIGINS`, `TURSO_*`, …) are forwarded by the compose file; empty means "use the app default". `/docs` and `/openapi.json` are off in production unless `ENABLE_DOCS=true`.
+Optional variables (`AUTH_MODE`, `ENABLE_DOCS`, `LOG_LEVEL`, rate limits, `TRUST_PROXY`, `CORS_ORIGINS`, `TURSO_*`, …) are forwarded by the compose file; empty means "use the app default". `/docs` and `/openapi.json` are off in production unless `ENABLE_DOCS=true`.
 
 ---
 

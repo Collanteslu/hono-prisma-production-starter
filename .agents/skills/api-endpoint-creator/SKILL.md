@@ -80,18 +80,21 @@ Use this skill whenever adding new routes or domain entities to the API.
    - Return errors with `errorResponse(c, message, status)`; the compiler only accepts status codes declared in `responses`.
    - Admin-only routes: `middleware: [requireAdmin] as const` in `createRoute`. Owned resources: check `resource.userId === c.get('user').userId`. Record audit events with `recordAudit()`.
 4. **Mount Route in `src/index.ts`**:
-   - Add the prefix to the authentication list and chain the router into `routes` (keep `AppType = typeof routes`):
+   - Add the prefix to the authentication list (only applied when `features.auth`, i.e. `AUTH_MODE` is `basic` or `full`) and chain the router into `routes` (keep `AppType = typeof routes`):
      ```typescript
-     for (const prefix of ['/api/sessions', '/api/users', '/api/tasks', '/api/audit-logs', '/api/<entity>']) {
-       app.use(prefix, authMiddleware);
-       app.use(`${prefix}/*`, authMiddleware);
+     if (features.auth) {
+       for (const prefix of ['/api/sessions', '/api/users', '/api/tasks', '/api/audit-logs', '/api/<entity>']) {
+         app.use(prefix, authMiddleware);
+         app.use(`${prefix}/*`, authMiddleware);
+       }
      }
 
      const routes = app
-       .route('/api/auth', authRoutes)
+       .route('/api/auth', whenEnabled(features.auth, authRoutes))
        // ...existing routes
-       .route('/api/<entity>', entityRoutes);
+       .route('/api/<entity>', entityRoutes); // or whenEnabled(features.auth, entityRoutes) if it needs users
      ```
+   - A module that only makes sense with users goes through `whenEnabled(flag, router)` (`src/lib/openapi.ts`): when disabled it is mounted as an empty router, so its paths answer 404 and stay out of the spec. If it must also work with `AUTH_MODE=none`, use `security: features.auth ? secured : []` and do not rely on `c.get('user')` there (see `viewerOf()` in `src/routes/tasks.ts`). List it conditionally in the `GET /` index and add a case to `tests/auth-mode-*.test.ts` (see `AGENTS.md`).
 5. **Verify Compilation & Tests**:
    - Always run `npx @biomejs/biome check --write . && npm run typecheck && npm test`. Add tests for the happy path and the 400/401/403/404 paths; `tests/openapi.test.ts` fails automatically if the new route is missing from the spec.
 6. **Update Docs & Bruno**:
