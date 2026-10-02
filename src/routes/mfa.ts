@@ -24,7 +24,6 @@ import { rateLimiter } from "../middleware/rateLimit.js";
 import { mfaDisableSchema, mfaEnableSchema, mfaSetupSchema } from "../schemas/index.js";
 import { successSchema } from "../schemas/responses.js";
 import { verifySecondFactor } from "../services/mfa.js";
-import { userSessionRevocationOps } from "../services/sessions.js";
 import { comparePassword } from "../utils/password.js";
 
 const router = createRouter();
@@ -140,18 +139,35 @@ export const mfaRoutes = router
     if (step === null) return errorResponse(c, "Invalid two-factor code.", 400);
 
     const recoveryCodes = generateRecoveryCodes();
-    await prisma.$transaction([
-      prisma.user.update({
-        where: { id: user.id },
+    const enabled = await prisma.$transaction(async (tx) => {
+      // Conditional claim: of two concurrent confirmations of the same pending setup only one wins,
+      // so the recovery codes it returns are the ones stored
+      const claimed = await tx.user.updateMany({
+        where: { id: user.id, totpEnabledAt: null, totpSecret: user.totpSecret },
         data: { totpEnabledAt: new Date(), totpLastStep: step },
-      }),
-      prisma.recoveryCode.deleteMany({ where: { userId: user.id } }),
-      prisma.recoveryCode.createMany({
+      });
+      if (claimed.count !== 1) return false;
+
+      await tx.recoveryCode.deleteMany({ where: { userId: user.id } });
+      await tx.recoveryCode.createMany({
         data: recoveryCodes.map((rc) => ({ userId: user.id, codeHash: hashRecoveryCode(rc) })),
-      }),
+      });
       // Any other device must sign in again, now with the second factor
-      ...userSessionRevocationOps(user.id, { exceptSessionId: current.sessionId }),
-    ]);
+      await tx.session.updateMany({
+        where: { userId: user.id, isActive: true, id: { not: current.sessionId } },
+        data: { isActive: false },
+      });
+      await tx.refreshToken.deleteMany({
+        where: {
+          userId: user.id,
+          OR: [{ sessionId: null }, { sessionId: { not: current.sessionId } }],
+        },
+      });
+      return true;
+    });
+    if (!enabled) {
+      return errorResponse(c, "There is no pending two-factor setup. Call /mfa/setup first.", 409);
+    }
 
     await recordAudit(c, {
       userId: user.id,

@@ -73,8 +73,9 @@ const envSchema = z
       .default(process.env.NODE_ENV === "production" ? "none" : "log"),
     SMTP_URL: z.string().optional(), // e.g. smtps://user:pass@smtp.example.com:465
     MAIL_FROM: z.string().default("Hono API <no-reply@localhost>"),
-    // Frontend base URL used to build the links sent by email (token is appended as ?token=...)
-    APP_URL: z.string().url().default("http://localhost:3000"),
+    // Frontend base URL used to build the links sent by email (token is appended as ?token=...).
+    // Defaults to http://localhost:3000, except in production with SMTP where it is required.
+    APP_URL: z.string().url().optional(),
     PASSWORD_RESET_TTL_MINUTES: z.coerce.number().positive().default(60),
     EMAIL_VERIFY_TTL_HOURS: z.coerce.number().positive().default(24),
     // When true, accounts must verify their email before they can sign in
@@ -117,6 +118,23 @@ const envSchema = z
         message: "MAIL_TRANSPORT=memory is for tests only",
       });
     }
+    // Real emails must not point at the localhost default (or at a plain-http page)
+    if (cfg.MAIL_TRANSPORT === "smtp") {
+      if (!cfg.APP_URL) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["APP_URL"],
+          message:
+            "APP_URL is required in production when MAIL_TRANSPORT=smtp (it builds the emailed links)",
+        });
+      } else if (new URL(cfg.APP_URL).protocol !== "https:") {
+        ctx.addIssue({
+          code: "custom",
+          path: ["APP_URL"],
+          message: "APP_URL must use https in production when MAIL_TRANSPORT=smtp",
+        });
+      }
+    }
     for (const key of ["JWT_SECRET", "JWT_REFRESH_SECRET"] as const) {
       if (cfg[key].length < 32) {
         ctx.addIssue({
@@ -133,7 +151,8 @@ const envSchema = z
         message: "JWT_REFRESH_SECRET must differ from JWT_SECRET in production",
       });
     }
-  });
+  })
+  .transform((cfg) => ({ ...cfg, APP_URL: cfg.APP_URL ?? "http://localhost:3000" }));
 
 // Empty variables (e.g. `ADMIN_EMAIL=` from docker-compose defaults) are treated as undefined
 const rawEnv = Object.fromEntries(
