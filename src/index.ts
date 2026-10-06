@@ -21,6 +21,7 @@ import { prisma, seedDatabase } from "./db.js";
 import { Prisma } from "./generated/client/client.js";
 import { startCleanupJob } from "./jobs/cleanup.js";
 import { logger as appLogger } from "./lib/logger.js";
+import { assertMigrationsUpToDate } from "./lib/migrations.js";
 import { createRouter, jsonResponse, whenEnabled } from "./lib/openapi.js";
 import { errorResponse } from "./lib/response.js";
 import { API_VERSION } from "./lib/version.js";
@@ -310,9 +311,24 @@ app.onError((err, c) => {
  * -------------------------------------------------------------
  * Server Initialization and Background Jobs
  * -------------------------------------------------------------
- * When executed directly (development, production), seed database, start cleanup job,
- * and bind HTTP listener. In test environments (Vitest), the exported app is tested directly.
+ * When executed directly (development, production): verify the migration history, seed the
+ * database, start the cleanup job, and bind the HTTP listener.
+ * In test environments (Vitest), the exported app is tested directly.
  */
+if (process.env.NODE_ENV !== "test") {
+  // Fail fast before touching data: an out-of-date database would otherwise surface later as
+  // random "no such table" errors in requests or background jobs
+  try {
+    await assertMigrationsUpToDate();
+  } catch (err) {
+    appLogger.fatal(
+      { err },
+      "❌ Database migration history does not match prisma/migrations. Resolve it before starting the server.",
+    );
+    process.exit(1);
+  }
+}
+
 await seedDatabase();
 
 let server: ReturnType<typeof serve> | undefined;

@@ -1,0 +1,110 @@
+/**
+ * @file migrations.ts
+ * @description Startup guard that compares the migration files in `prisma/migrations` with the rows
+ * recorded in `_prisma_migrations`. An out-of-date database fails fast with an actionable message
+ * instead of surfacing later as confusing runtime errors (e.g. "no such table" in background jobs).
+ */
+
+import { createHash } from "node:crypto";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import path from "node:path";
+import { prisma } from "../db.js";
+import { logger } from "./logger.js";
+
+const MIGRATIONS_DIR = path.resolve(process.cwd(), "prisma", "migrations");
+
+type MigrationRow = {
+  migration_name: string;
+  checksum: string;
+  finished_at: number | bigint | null;
+};
+
+function sha256OfFile(filePath: string): string {
+  return createHash("sha256").update(readFileSync(filePath)).digest("hex");
+}
+
+/** Migration folder names on disk, in the order Prisma applies them. */
+function localMigrationNames(): string[] {
+  if (!existsSync(MIGRATIONS_DIR)) return [];
+  return readdirSync(MIGRATIONS_DIR, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+}
+
+/**
+ * Verifies every migration shipped in `prisma/migrations` is recorded as applied in the database
+ * with a matching SHA-256 checksum (the same value `prisma migrate deploy` stores).
+ * @throws Error listing the pending, failed, modified or untracked migrations
+ */
+export async function assertMigrationsUpToDate(): Promise<void> {
+  const local = localMigrationNames();
+  if (local.length === 0) {
+    logger.warn(
+      `No migration folders found in ${MIGRATIONS_DIR}: skipping the startup migration check`,
+    );
+    return;
+  }
+
+  let rows: MigrationRow[];
+  try {
+    rows = await prisma.$queryRaw<MigrationRow[]>`
+      SELECT migration_name, checksum, finished_at FROM _prisma_migrations
+    `;
+  } catch {
+    // Fresh database without any migration history: every migration is pending
+    rows = [];
+  }
+  const applied = new Map(rows.map((row) => [row.migration_name, row]));
+
+  const pending: string[] = [];
+  const failed: string[] = [];
+  const modified: string[] = [];
+  for (const name of local) {
+    const row = applied.get(name);
+    if (!row) {
+      pending.push(name);
+      continue;
+    }
+    if (row.finished_at === null || row.finished_at === undefined) failed.push(name);
+    const expected = sha256OfFile(path.join(MIGRATIONS_DIR, name, "migration.sql"));
+    if (row.checksum !== expected) modified.push(name);
+  }
+  const untracked = rows.map((row) => row.migration_name).filter((name) => !local.includes(name));
+
+  if (
+    pending.length === 0 &&
+    failed.length === 0 &&
+    modified.length === 0 &&
+    untracked.length === 0
+  ) {
+    logger.debug(
+      { migrations: local.length },
+      "Database migration history is in sync with prisma/migrations",
+    );
+    return;
+  }
+
+  const findings: string[] = [];
+  if (pending.length > 0) {
+    findings.push(`Pending: ${pending.join(", ")} — apply them with \`npx prisma migrate deploy\``);
+  }
+  if (failed.length > 0) {
+    findings.push(
+      `Failed (never completed): ${failed.join(", ")} — repair with \`npx prisma migrate resolve\``,
+    );
+  }
+  if (modified.length > 0) {
+    findings.push(
+      `Modified after being applied: ${modified.join(", ")} — restore the original SQL or add a new migration; never edit an applied one`,
+    );
+  }
+  if (untracked.length > 0) {
+    findings.push(
+      `Applied but absent from prisma/migrations: ${untracked.join(", ")} — the migration files were deleted or renamed`,
+    );
+  }
+  throw new Error(
+    `Migration history does not match prisma/migrations:\n  ${findings.join("\n  ")}`,
+  );
+}
