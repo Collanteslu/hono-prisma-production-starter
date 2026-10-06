@@ -38,3 +38,5 @@ coverage/
 *.db-journal
 dev.db
 src/generated/
+*.db-wal
+*.db-shm
