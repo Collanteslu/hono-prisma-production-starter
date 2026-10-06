@@ -7,7 +7,8 @@ runbooks live in [`.agents/skills/`](.agents/skills/), and the [README](README.m
 reference (endpoints, configuration, security model).
 
 **Stack:** Hono v4 · Prisma 7 with the libSQL driver adapter (SQLite file locally, optionally Turso) ·
-Zod 4 + `@hono/zod-openapi` · Vitest · Biome · Node.js 20.
+Zod 4 + `@hono/zod-openapi` · Vitest · Biome · Node.js 22 (`engines.node >=22.12`; the Docker base image is still
+`node:20-alpine` — bump it together with a `docker run` smoke test before deploying).
 
 ## Install and run
 
@@ -116,7 +117,9 @@ SQLite is the only provider (`provider = "sqlite"`, libSQL adapter); Turso is se
 Every new or changed endpoint needs a request in `bruno/<Module>/` (see
 [`.agents/skills/bruno-testing`](.agents/skills/bruno-testing/SKILL.md)). Tokens are runtime variables set
 by the `Login *` post-response scripts and are never written to disk; `environments/Local.bru` only holds
-`baseUrl`. `tests/openapi.test.ts` fails if an `/api/auth` endpoint has no Bruno request.
+`baseUrl`. `tests/account-security-docs.test.ts` fails if a documented `/api/auth/*` endpoint has no
+request in `bruno/Auth/` — that parity check covers the Auth module only, so keep the other modules'
+requests in sync by hand.
 
 ## Safety rules
 

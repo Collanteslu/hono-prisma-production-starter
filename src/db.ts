@@ -56,6 +56,14 @@ export const prisma = new PrismaClient({
 /**
  * Switches a local SQLite file to WAL journaling (readers never block behind the single writer)
  * with synchronous=NORMAL, the safe and fast pairing for WAL. Never applied to remote databases.
+ *
+ * Measured against this adapter: `journal_mode` is stored in the database file so it holds for every
+ * connection, while `synchronous` is per connection and only covers the one that ran the statement —
+ * a pooled writer may still fsync. There is no connection-pool hook in @prisma/adapter-libsql to fix
+ * that, so the pragmas stay a best-effort local optimization, not a durability guarantee.
+ *
+ * `PRAGMA foreign_keys` is already ON on this adapter's connections (verified empirically), so the
+ * schema's onDelete: Cascade / SetNull relations do fire and dependents never need manual deletes.
  */
 export async function applySqlitePragmas(): Promise<void> {
   if (!libsqlUrl.startsWith("file:")) return;
