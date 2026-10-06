@@ -198,6 +198,12 @@ export const recoveryRoutes = router
       if (!user || user.deletedAt || user.isBlocked || user.emailVerifiedAt) return;
       if (!(await mayEmail("verify", email))) return;
       await sendVerificationEmail(user);
+      await recordAudit(c, {
+        userId: user.id,
+        action: "VERIFICATION_EMAIL_RESENT",
+        entity: "User",
+        entityId: user.id,
+      });
     });
 
     return c.json(

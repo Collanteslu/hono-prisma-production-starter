@@ -15,6 +15,7 @@ import { parseFilters, parseSorting } from "../lib/query.js";
 import { parseIncludes } from "../lib/relations.js";
 import { buildPagination, errorResponse, successResponse } from "../lib/response.js";
 import { requireAdmin } from "../middleware/auth.js";
+import { createLoginLockout } from "../middleware/rateLimit.js";
 import {
   blockUserSchema,
   changeRoleSchema,
@@ -35,6 +36,14 @@ const router = createRouter();
 
 const authErrors = { 401: "Token ausente, inválido o sesión revocada" } as const;
 const adminErrors = { ...authErrors, 403: "Requiere rol administrador" } as const;
+
+// Brute-force guard for the current-password confirmation required to change password/email:
+// failed confirmations lock the account like failed logins do (separate counter per account)
+const passwordConfirmLockout = createLoginLockout(
+  env.LOGIN_LOCKOUT_MAX_FAILURES,
+  env.LOGIN_LOCKOUT_MINUTES * 60_000,
+);
+const confirmKey = (userId: string) => `password-confirm:${userId}`;
 
 const USER_INCLUDES = {
   tasks: true,
@@ -174,6 +183,7 @@ const updateRoute = createRoute({
       ...adminErrors,
       404: "Usuario no encontrado",
       409: "Email en uso",
+      429: "Demasiadas confirmaciones de contraseña incorrectas",
     }),
   },
 });
@@ -276,7 +286,9 @@ export const userRoutes = router
       include: parseIncludes(c.req.query("include"), USER_INCLUDES),
     });
 
-    if (!user) {
+    // Soft-deleted accounts are hidden by default (the list does the same); the documented
+    // includeDeleted=true parameter is the only way to read one back
+    if (!user || (user.deletedAt && c.req.valid("query").includeDeleted !== "true")) {
       return errorResponse(c, `User with ID '${id}' not found.`, 404);
     }
 
@@ -482,6 +494,14 @@ export const userRoutes = router
     // modifying someone else are exempt.
     const emailChanging = Boolean(email && email !== existingUser.email);
     if ((password || emailChanging) && currentUser.userId === id) {
+      const retryAfter = await passwordConfirmLockout.retryAfterSeconds(confirmKey(id));
+      if (retryAfter > 0) {
+        return errorResponse(
+          c,
+          `Too many incorrect password confirmations. Try again in ${retryAfter} seconds.`,
+          429,
+        );
+      }
       const stored = await prisma.user.findUnique({
         where: { id },
         omit: { password: false },
@@ -489,8 +509,10 @@ export const userRoutes = router
       const valid =
         !!currentPassword && !!stored && (await comparePassword(currentPassword, stored.password));
       if (!valid) {
+        await passwordConfirmLockout.recordFailure(confirmKey(id));
         return errorResponse(c, "Current password is missing or incorrect.", 403);
       }
+      await passwordConfirmLockout.reset(confirmKey(id));
     }
 
     if (email && email !== existingUser.email) {

@@ -77,7 +77,11 @@ model Session {
   user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   refreshTokens RefreshToken[]
 
-  @@index([userId])
+  // [userId, createdAt] also serves plain userId lookups and the sessions list ordering;
+  // the other two match the cleanup job's deleteMany conditions
+  @@index([userId, createdAt])
+  @@index([expiresAt])
+  @@index([isActive, updatedAt])
 }
 
 model RefreshToken {
@@ -94,6 +98,9 @@ model RefreshToken {
 
   @@index([userId])
   @@index([sessionId])
+  // Cleanup job purges by expiry or by rotation age
+  @@index([expiresAt])
+  @@index([usedAt])
 }
 
 /// Example resource. Owned by a user with AUTH_MODE=basic/full; ownerless (userId null, public)
@@ -127,6 +134,8 @@ model AuditLog {
 
   @@index([createdAt])
   @@index([entity, action])
+  // GET /api/audit-logs filters by userId; the FK SetNull on user delete also needs it
+  @@index([userId])
 }
 
 /// Fixed-window counters shared by every instance (rate limits and login lockout), so limits hold

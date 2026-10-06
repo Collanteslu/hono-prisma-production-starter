@@ -10,7 +10,7 @@
 import type { Context, Next } from "hono";
 import { getClientIp } from "../lib/clientIp.js";
 import { logger } from "../lib/logger.js";
-import { clearBucket, hitBucket, peekBucket } from "../lib/rateLimitStore.js";
+import { clearBucket, hitBucket, peekBucket, slideBucketWindow } from "../lib/rateLimitStore.js";
 
 /**
  * Creates an IP-based rate limiting middleware.
@@ -73,6 +73,8 @@ export function createLoginLockout(maxFailures = 5, lockoutMs = 15 * 60_000) {
     },
     async recordFailure(account: string): Promise<void> {
       await hitBucket(keyOf(account), lockoutMs);
+      // The lockout is measured from the last failure, not from the first one
+      await slideBucketWindow(keyOf(account), lockoutMs);
     },
     async reset(account: string): Promise<void> {
       await clearBucket(keyOf(account));

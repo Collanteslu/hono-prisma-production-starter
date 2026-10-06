@@ -62,6 +62,18 @@ export async function peekBucket(key: string): Promise<Bucket | null> {
   return bucket && bucket.resetAt.getTime() > Date.now() ? bucket : null;
 }
 
+/**
+ * Pushes the end of a live window forward so it is measured from the LATEST hit (sliding lockout:
+ * failures spread across the window must not unlock seconds after the last one).
+ */
+export async function slideBucketWindow(key: string, windowMs: number): Promise<void> {
+  const now = new Date();
+  await prisma.rateLimitBucket.updateMany({
+    where: { key, resetAt: { gt: now } },
+    data: { resetAt: new Date(now.getTime() + windowMs) },
+  });
+}
+
 export async function clearBucket(key: string): Promise<void> {
   await prisma.rateLimitBucket.deleteMany({ where: { key } });
 }

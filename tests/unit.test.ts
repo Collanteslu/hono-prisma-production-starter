@@ -40,6 +40,18 @@ describe("parseFilters", () => {
     ).toEqual({});
   });
 
+  it("combines range operators on the same field into one Prisma condition", () => {
+    expect(
+      parseFilters(
+        {
+          "filter[createdAt][gte]": "2026-01-01",
+          "filter[createdAt][lte]": "2026-12-31",
+        },
+        options,
+      ),
+    ).toEqual({ createdAt: { gte: new Date("2026-01-01"), lte: new Date("2026-12-31") } });
+  });
+
   it("throws HTTP 400 for unsupported operators or malformed values", () => {
     expect(() => parseFilters({ "filter[completed][contains]": "t" }, options)).toThrow(
       HTTPException,
@@ -92,6 +104,22 @@ describe("createLoginLockout", () => {
     expect(await lockout.retryAfterSeconds(account)).toBeGreaterThan(0);
     await lockout.reset(account);
     expect(await lockout.retryAfterSeconds(account)).toBe(0);
+  });
+
+  it("slides the lockout window so it is measured from the LAST failure", async () => {
+    vi.useFakeTimers();
+    try {
+      const lockout = createLoginLockout(2, 60_000);
+      const account = `${randomUUID()}@example.com`;
+      await lockout.recordFailure(account);
+      // The failures happen 30 seconds apart (a fixed window would now unlock in ~30s)
+      await vi.advanceTimersByTimeAsync(30_000);
+      await lockout.recordFailure(account);
+      expect(await lockout.retryAfterSeconds(account)).toBeGreaterThanOrEqual(55);
+      await lockout.reset(account);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

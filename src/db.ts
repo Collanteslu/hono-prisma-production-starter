@@ -34,6 +34,11 @@ function resolveDatabaseUrl(): string {
 }
 
 const libsqlUrl = resolveDatabaseUrl();
+if (env.TURSO_DATABASE_URL && env.DATABASE_URL) {
+  logger.warn(
+    "TURSO_DATABASE_URL and DATABASE_URL are both set: TURSO_DATABASE_URL takes precedence, DATABASE_URL is ignored",
+  );
+}
 const adapter = new PrismaLibSql({
   url: libsqlUrl,
   authToken: env.TURSO_AUTH_TOKEN,
@@ -47,6 +52,19 @@ export const prisma = new PrismaClient({
   adapter,
   omit: { user: { password: true, totpSecret: true, totpLastStep: true } },
 });
+
+/**
+ * Switches a local SQLite file to WAL journaling (readers never block behind the single writer)
+ * with synchronous=NORMAL, the safe and fast pairing for WAL. Never applied to remote databases.
+ */
+export async function applySqlitePragmas(): Promise<void> {
+  if (!libsqlUrl.startsWith("file:")) return;
+  const [{ journal_mode }] = await prisma.$queryRawUnsafe<{ journal_mode: string }[]>(
+    "PRAGMA journal_mode=WAL;",
+  );
+  await prisma.$queryRawUnsafe("PRAGMA synchronous=NORMAL;");
+  logger.info({ journalMode: journal_mode }, "SQLite pragmas applied at startup");
+}
 
 /**
  * Database seeder executed during application startup.

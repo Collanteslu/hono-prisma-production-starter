@@ -6,6 +6,7 @@
 import { OpenAPIHono, type z } from "@hono/zod-openapi";
 import { errorSchema } from "../schemas/responses.js";
 import type { AppEnv } from "../types/index.js";
+import { buildMeta } from "./response.js";
 import { formatIssues } from "./validator.js";
 
 /**
@@ -23,6 +24,8 @@ export const createRouter = () =>
                 ? "Validation error in request payload"
                 : `Invalid request ${result.target} parameters`,
             errors: formatIssues(result.error.issues),
+            // Same telemetry envelope as every other error, so requestId survives validation 400s
+            meta: buildMeta(c),
           },
           400,
         );

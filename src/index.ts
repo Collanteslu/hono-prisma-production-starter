@@ -17,7 +17,7 @@ import { secureHeaders } from "hono/secure-headers";
 
 // Environment configuration and database client
 import { env, features } from "./config/env.js";
-import { prisma, seedDatabase } from "./db.js";
+import { applySqlitePragmas, prisma, seedDatabase } from "./db.js";
 import { Prisma } from "./generated/client/client.js";
 import { startCleanupJob } from "./jobs/cleanup.js";
 import { logger as appLogger } from "./lib/logger.js";
@@ -117,7 +117,16 @@ if (env.ENABLE_DOCS ?? env.NODE_ENV !== "production") {
         ? `API REST con Hono, Prisma 7 (SQLite), TypeScript, Zod, autenticación JWT con refresh tokens rotativos, sesiones con estado y rate limiting (AUTH_MODE=${env.AUTH_MODE}).`
         : "API REST con Hono, Prisma 7 (SQLite), TypeScript y Zod, sin autenticación (AUTH_MODE=none): todas las rutas son públicas.",
     },
-    servers: [{ url: `http://localhost:${env.PORT}`, description: "Servidor local" }],
+    servers: [
+      {
+        // In production the spec must not advertise localhost (Scalar "try it" would fail silently)
+        url:
+          env.NODE_ENV === "production"
+            ? (env.APP_URL ?? `http://localhost:${env.PORT}`)
+            : `http://localhost:${env.PORT}`,
+        description: env.NODE_ENV === "production" ? "Production" : "Local development",
+      },
+    ],
     // Only the tags of the mounted modules
     tags: [
       ...(features.auth ? [{ name: "Auth" }] : []),
@@ -316,6 +325,8 @@ app.onError((err, c) => {
  * In test environments (Vitest), the exported app is tested directly.
  */
 if (process.env.NODE_ENV !== "test") {
+  // WAL for local SQLite files before any concurrent traffic starts
+  await applySqlitePragmas();
   // Fail fast before touching data: an out-of-date database would otherwise surface later as
   // random "no such table" errors in requests or background jobs
   try {

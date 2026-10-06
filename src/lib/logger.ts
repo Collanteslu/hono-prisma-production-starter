@@ -12,6 +12,25 @@ const isProduction = env.NODE_ENV === "production";
 
 export const logger = pino({
   level: env.LOG_LEVEL ?? (isProduction ? "info" : "debug"),
+  // Credentials must never reach the log aggregator even when a handler logs a whole object
+  redact: {
+    paths: [
+      "password",
+      "currentPassword",
+      "newPassword",
+      "token",
+      "refreshToken",
+      "accessToken",
+      "authorization",
+      "*.password",
+      "*.currentPassword",
+      "*.token",
+      "*.refreshToken",
+      "*.accessToken",
+      "req.headers.authorization",
+    ],
+    censor: "[redacted]",
+  },
   transport: isProduction
     ? undefined
     : {

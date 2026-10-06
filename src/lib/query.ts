@@ -100,7 +100,17 @@ export function parseFilters(
     } else if (operator === "in") {
       where[field] = { in: val.split(",").map((s) => coerceValue(field, type, s.trim())) };
     } else {
-      where[field] = { [operator]: operator === "contains" ? val : coerceValue(field, type, val) };
+      // Range/contains operators combine (gte+lte = a range); eq and in replace
+      const value = operator === "contains" ? val : coerceValue(field, type, val);
+      const prev = where[field];
+      const combinable =
+        typeof prev === "object" &&
+        prev !== null &&
+        !Array.isArray(prev) &&
+        !("in" in (prev as Record<string, unknown>));
+      where[field] = combinable
+        ? { ...(prev as Record<string, unknown>), [operator]: value }
+        : { [operator]: value };
     }
   }
 
