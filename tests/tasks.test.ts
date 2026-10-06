@@ -90,6 +90,20 @@ describe("Tasks CRUD & Ownership API", () => {
   });
 
   it("GET /api/tasks?filter[completed]=true should filter tasks dynamically", async () => {
+    // Seed a completed task: with no matching row the assertion below would pass vacuously
+    const createRes = await app.request("/api/tasks", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${userToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        title: "Completed task for the filter test",
+        completed: true,
+      }),
+    });
+    expect(createRes.status).toBe(201);
+
     const res = await app.request("/api/tasks?filter[completed]=true", {
       method: "GET",
       headers: {
@@ -100,6 +114,7 @@ describe("Tasks CRUD & Ownership API", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.success).toBe(true);
+    expect(body.data.length).toBeGreaterThan(0);
     for (const task of body.data) {
       expect(task.completed).toBe(true);
     }

@@ -58,6 +58,16 @@ describe("Authentication & Session API", () => {
     expect(data.success).toBe(true);
     expect(Array.isArray(data.data)).toBe(true);
     expect(data.data.length).toBeGreaterThan(0);
+
+    // Ownership: the route is scoped to the caller, so no other account's session may appear
+    const admin = await prisma.user.findUniqueOrThrow({ where: { email: "admin@example.com" } });
+    for (const session of data.data) {
+      expect(session.userId).toBe(admin.id);
+    }
+    expect(data.data.filter((s: { isCurrent: boolean }) => s.isCurrent)).toHaveLength(1);
+    expect(data.currentSessionId).toBe(
+      data.data.find((s: { isCurrent: boolean }) => s.isCurrent).id,
+    );
   });
 
   it("POST /api/auth/refresh should perform token rotation", async () => {

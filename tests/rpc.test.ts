@@ -38,6 +38,14 @@ describe("Hono RPC client (hc<AppType>)", () => {
     }
   });
 
+  it("types the healthcheck, whose route is registered before the router is chained", async () => {
+    const res = await client().healthz.$get();
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.status).toBe("healthy");
+    expect(body.database.latencyMs).toBeTypeOf("number");
+  });
+
   it("narrows error responses by status code", async () => {
     const user = await createTestUser();
     const res = await client(user.accessToken).api.tasks[":id"].$get({
