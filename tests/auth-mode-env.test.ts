@@ -53,6 +53,26 @@ describe("AUTH_MODE configuration", () => {
     expect(again.env?.JWT_SECRET).not.toBe(none.env?.JWT_SECRET);
   });
 
+  it("rejects identical signing secrets in every environment", async () => {
+    const shared = "a".repeat(48);
+    for (const mode of ["basic", "full"]) {
+      const { env, error } = await loadEnv({
+        AUTH_MODE: mode,
+        JWT_SECRET: shared,
+        JWT_REFRESH_SECRET: shared,
+      });
+      expect(error, mode).toContain("JWT_REFRESH_SECRET must differ from JWT_SECRET");
+      expect(env, mode).toBeNull();
+    }
+    // AUTH_MODE=none signs nothing, so identical (or absent) secrets stay acceptable
+    const none = await loadEnv({
+      AUTH_MODE: "none",
+      JWT_SECRET: shared,
+      JWT_REFRESH_SECRET: shared,
+    });
+    expect(none.error).toBeNull();
+  });
+
   it("starts in production without secrets when AUTH_MODE=none", async () => {
     const { error } = await loadEnv({
       NODE_ENV: "production",

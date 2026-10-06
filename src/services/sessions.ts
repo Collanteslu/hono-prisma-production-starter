@@ -182,7 +182,10 @@ export async function rotateRefreshToken(
     return { status: "concurrent" };
   }
 
-  // Token Reuse Detection: a validly signed but already-rotated/revoked token was replayed
+  // Token Reuse Detection: a validly signed but already-rotated/revoked token was replayed.
+  // Refresh rotation happens inside one session, so that session IS the token family: revoking
+  // it (and its token chain) matches the OAuth 2.0 Security BCP without logging out the
+  // user's other, unrelated devices.
   await revokeSession(sessionId);
   return { status: "reused" };
 }

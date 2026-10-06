@@ -146,6 +146,15 @@ const envSchema = z
           "REQUIRE_EMAIL_VERIFICATION needs a mail transport that delivers (MAIL_TRANSPORT=smtp), otherwise nobody could verify",
       });
     }
+    if (authEnabled && cfg.JWT_SECRET && cfg.JWT_SECRET === cfg.JWT_REFRESH_SECRET) {
+      // Same secret in ANY environment: a refresh token would then verify as an access token
+      // (both payloads carry userId and the access verifier only checks those claims)
+      ctx.addIssue({
+        code: "custom",
+        path: ["JWT_REFRESH_SECRET"],
+        message: "JWT_REFRESH_SECRET must differ from JWT_SECRET",
+      });
+    }
     if (cfg.NODE_ENV !== "production") return;
     // Production hardening below
     if (cfg.MAIL_TRANSPORT === "memory") {
@@ -182,13 +191,6 @@ const envSchema = z
           message: `${key} must contain at least 32 characters in production (generate one with: openssl rand -base64 48)`,
         });
       }
-    }
-    if (cfg.JWT_SECRET === cfg.JWT_REFRESH_SECRET) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["JWT_REFRESH_SECRET"],
-        message: "JWT_REFRESH_SECRET must differ from JWT_SECRET in production",
-      });
     }
   })
   .transform((cfg) => ({
