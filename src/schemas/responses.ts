@@ -41,6 +41,11 @@ export const errorSchema = z
       .record(z.string(), z.array(z.string()))
       .optional()
       .openapi({ description: "Errores de validación por campo" }),
+    retryAfterSeconds: z
+      .number()
+      .int()
+      .optional()
+      .openapi({ description: "Only on 429: seconds until the counter window resets" }),
     meta: metaSchema.optional(),
   })
   .openapi("Error");

@@ -23,7 +23,7 @@ import { startCleanupJob } from "./jobs/cleanup.js";
 import { logger as appLogger } from "./lib/logger.js";
 import { assertMigrationsUpToDate } from "./lib/migrations.js";
 import { createRouter, jsonResponse, whenEnabled } from "./lib/openapi.js";
-import { errorResponse } from "./lib/response.js";
+import { buildMeta, errorResponse } from "./lib/response.js";
 import { API_VERSION } from "./lib/version.js";
 // Middlewares
 import { authMiddleware } from "./middleware/auth.js";
@@ -92,8 +92,9 @@ app.use(
     onError: (c) =>
       c.json(
         {
-          success: false,
+          success: false as const,
           message: "Payload Too Large: Request body exceeds the maximum permitted limit of 100 KB.",
+          meta: buildMeta(c),
         },
         413,
       ),
@@ -163,7 +164,10 @@ const healthRoute = createRoute({
   },
 });
 
-app.openapi(healthRoute, async (c) => {
+// The return value is kept on purpose: `hc<AppType>` only sees routes whose type flows into the
+// chained expression below, and a discarded `app.openapi(...)` statement registers /healthz at
+// runtime while leaving it out of the typed client.
+const withHealth = app.openapi(healthRoute, async (c) => {
   try {
     const startTime = Date.now();
     await prisma.$queryRaw`SELECT 1`;
@@ -266,7 +270,7 @@ if (features.auth) {
 // Route modules chained cleanly for Hono RPC. Modules disabled by AUTH_MODE are mounted as empty
 // routers (see whenEnabled): their paths answer 404 and are absent from /openapi.json.
 //   basic: auth, sessions, users, audit | full: basic + recovery/verification and MFA
-const routes = app
+const routes = withHealth
   .route("/api/auth", whenEnabled(features.auth, authRoutes))
   .route("/api/auth", whenEnabled(features.accountSecurity, recoveryRoutes))
   .route("/api/auth", whenEnabled(features.accountSecurity, mfaRoutes))
@@ -327,6 +331,18 @@ app.onError((err, c) => {
 if (process.env.NODE_ENV !== "test") {
   // WAL for local SQLite files before any concurrent traffic starts
   await applySqlitePragmas();
+  // Configuration traps that would otherwise only surface as an incident: both are warnings, not
+  // startup failures, because existing deployments must keep booting after an upgrade.
+  if (features.accountSecurity && !env.MFA_ENCRYPTION_KEY) {
+    appLogger.warn(
+      "MFA_ENCRYPTION_KEY is unset, so TOTP secrets are encrypted with a key derived from JWT_SECRET: rotating JWT_SECRET makes every enrolled authenticator undecryptable and its 2FA login fails. Set a dedicated, stable MFA_ENCRYPTION_KEY.",
+    );
+  }
+  if (env.NODE_ENV === "production" && env.MAIL_TRANSPORT === "log") {
+    appLogger.warn(
+      "MAIL_TRANSPORT=log in production writes every password-reset and verification link (a live credential) into the log stream. Use MAIL_TRANSPORT=smtp.",
+    );
+  }
   // Fail fast before touching data: an out-of-date database would otherwise surface later as
   // random "no such table" errors in requests or background jobs
   try {
@@ -346,7 +362,7 @@ let server: ReturnType<typeof serve> | undefined;
 
 if (process.env.NODE_ENV !== "test") {
   // Start recurring cleanup job to purge expired sessions every hour
-  startCleanupJob(60 * 60 * 1000);
+  const cleanupTimer = startCleanupJob(60 * 60 * 1000);
 
   appLogger.info(`🚀 Hono server listening on http://localhost:${env.PORT}`);
   appLogger.info(
@@ -363,9 +379,10 @@ if (process.env.NODE_ENV !== "test") {
    * Graceful Process Shutdown
    * -------------------------------------------------------------
    * Intercepts OS signals (SIGINT, SIGTERM) to:
-   * 1. Reject incoming requests.
-   * 2. Allow in-flight requests to complete execution.
-   * 3. Safely disconnect Prisma and close SQLite connection without data corruption.
+   * 1. Stop the recurring cleanup job so it cannot start a query against a closing client.
+   * 2. Reject incoming requests.
+   * 3. Allow in-flight requests to complete execution.
+   * 4. Safely disconnect Prisma and close SQLite connection without data corruption.
    */
   let isShuttingDown = false;
 
@@ -374,6 +391,8 @@ if (process.env.NODE_ENV !== "test") {
     isShuttingDown = true;
 
     appLogger.info(`\n🛑 Received ${signal}. Initiating graceful shutdown...`);
+
+    clearInterval(cleanupTimer);
 
     try {
       server?.close(async () => {

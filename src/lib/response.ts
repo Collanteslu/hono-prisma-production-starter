@@ -43,7 +43,7 @@ export function buildPagination(total: number, page: number, limit: number): Pag
 /**
  * Helper to return a standardized success JSON response with data and telemetry metadata.
  */
-export function successResponse<T, S extends 200 | 201 = 200>(
+export function successResponse<T, S extends 200 | 201 | 202 = 200>(
   c: Context<AppEnv>,
   data: T,
   options?: {
