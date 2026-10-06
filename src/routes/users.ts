@@ -15,7 +15,7 @@ import { parseFilters, parseSorting } from "../lib/query.js";
 import { parseIncludes } from "../lib/relations.js";
 import { buildPagination, errorResponse, successResponse } from "../lib/response.js";
 import { requireAdmin } from "../middleware/auth.js";
-import { createLoginLockout } from "../middleware/rateLimit.js";
+import { passwordConfirmKey, passwordConfirmLockout } from "../middleware/rateLimit.js";
 import {
   blockUserSchema,
   changeRoleSchema,
@@ -27,7 +27,11 @@ import {
   userQuerySchema,
 } from "../schemas/index.js";
 import { successSchema, userSchema } from "../schemas/responses.js";
-import { inBackground, sendVerificationEmail } from "../services/accountMail.js";
+import {
+  inBackground,
+  sendEmailChangedNotice,
+  sendVerificationEmail,
+} from "../services/accountMail.js";
 import { deletePendingAuthTokensOp } from "../services/authTokens.js";
 import { revokeUserSessions, userSessionRevocationOps } from "../services/sessions.js";
 import { comparePassword, hashPassword } from "../utils/password.js";
@@ -37,16 +41,10 @@ const router = createRouter();
 const authErrors = { 401: "Token ausente, inválido o sesión revocada" } as const;
 const adminErrors = { ...authErrors, 403: "Requiere rol administrador" } as const;
 
-// Brute-force guard for the current-password confirmation required to change password/email:
-// failed confirmations lock the account like failed logins do (separate counter per account)
-const passwordConfirmLockout = createLoginLockout(
-  env.LOGIN_LOCKOUT_MAX_FAILURES,
-  env.LOGIN_LOCKOUT_MINUTES * 60_000,
-);
-const confirmKey = (userId: string) => `password-confirm:${userId}`;
-
+// Soft-deleted tasks are left out of `?include=tasks` on purpose: the task list hides them the same
+// way unless the caller explicitly asks for them (AGENTS.md rule 6). The relation stays unbounded.
 const USER_INCLUDES = {
-  tasks: true,
+  tasks: { where: { deletedAt: null } },
   sessions: true,
 } as const;
 
@@ -91,7 +89,11 @@ const getRoute = createRoute({
   request: { params: idParamSchema, query: detailQuerySchema },
   responses: {
     200: jsonResponse(successSchema(userSchema), "Usuario"),
-    ...errorResponses({ ...adminErrors, 404: "Usuario no encontrado" }),
+    ...errorResponses({
+      400: "Parámetros de consulta inválidos",
+      ...adminErrors,
+      404: "Usuario no encontrado",
+    }),
   },
 });
 
@@ -200,6 +202,7 @@ const deleteRoute = createRoute({
   responses: {
     200: jsonResponse(successSchema(userSchema), "Usuario eliminado"),
     ...errorResponses({
+      400: "Parámetros de consulta inválidos",
       ...adminErrors,
       404: "Usuario no encontrado",
       409: "No se puede eliminar al último administrador activo",
@@ -494,7 +497,7 @@ export const userRoutes = router
     // modifying someone else are exempt.
     const emailChanging = Boolean(email && email !== existingUser.email);
     if ((password || emailChanging) && currentUser.userId === id) {
-      const retryAfter = await passwordConfirmLockout.retryAfterSeconds(confirmKey(id));
+      const retryAfter = await passwordConfirmLockout.retryAfterSeconds(passwordConfirmKey(id));
       if (retryAfter > 0) {
         return errorResponse(
           c,
@@ -509,10 +512,10 @@ export const userRoutes = router
       const valid =
         !!currentPassword && !!stored && (await comparePassword(currentPassword, stored.password));
       if (!valid) {
-        await passwordConfirmLockout.recordFailure(confirmKey(id));
+        await passwordConfirmLockout.recordFailure(passwordConfirmKey(id));
         return errorResponse(c, "Current password is missing or incorrect.", 403);
       }
-      await passwordConfirmLockout.reset(confirmKey(id));
+      await passwordConfirmLockout.reset(passwordConfirmKey(id));
     }
 
     if (email && email !== existingUser.email) {
@@ -555,6 +558,9 @@ export const userRoutes = router
 
     if (emailChanging && features.accountSecurity && env.MAIL_TRANSPORT !== "none") {
       inBackground(() => sendVerificationEmail(updatedUser));
+      inBackground(() =>
+        sendEmailChangedNotice({ name: updatedUser.name, email: existingUser.email }),
+      );
     }
 
     await recordAudit(c, {

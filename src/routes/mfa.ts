@@ -20,7 +20,11 @@ import {
   verifyTotp,
 } from "../lib/totp.js";
 import { authMiddleware, requireAdmin } from "../middleware/auth.js";
-import { rateLimiter } from "../middleware/rateLimit.js";
+import {
+  passwordConfirmKey,
+  passwordConfirmLockout,
+  rateLimiter,
+} from "../middleware/rateLimit.js";
 import {
   idParamSchema,
   mfaDisableSchema,
@@ -120,9 +124,22 @@ export const mfaRoutes = router
     const { currentPassword } = c.req.valid("json");
     const user = await loadUser(c.get("user").userId);
 
+    // Same per-account guard as the profile password change: a stolen access token must not get
+    // unlimited offline guesses at the password through this endpoint
+    const lockoutKey = passwordConfirmKey(user.id);
+    const retryAfter = await passwordConfirmLockout.retryAfterSeconds(lockoutKey);
+    if (retryAfter > 0) {
+      return errorResponse(
+        c,
+        `Too many incorrect password confirmations. Try again in ${retryAfter} seconds.`,
+        429,
+      );
+    }
     if (!(await comparePassword(currentPassword, user.password))) {
+      await passwordConfirmLockout.recordFailure(lockoutKey);
       return errorResponse(c, "Current password is incorrect.", 403);
     }
+    await passwordConfirmLockout.reset(lockoutKey);
     if (user.totpEnabledAt)
       return errorResponse(c, "Two-factor authentication is already enabled.", 409);
 
@@ -200,9 +217,21 @@ export const mfaRoutes = router
 
     if (!user.totpEnabledAt)
       return errorResponse(c, "Two-factor authentication is not enabled.", 409);
+
+    const lockoutKey = passwordConfirmKey(user.id);
+    const retryAfter = await passwordConfirmLockout.retryAfterSeconds(lockoutKey);
+    if (retryAfter > 0) {
+      return errorResponse(
+        c,
+        `Too many incorrect password confirmations. Try again in ${retryAfter} seconds.`,
+        429,
+      );
+    }
     if (!(await comparePassword(currentPassword, user.password))) {
+      await passwordConfirmLockout.recordFailure(lockoutKey);
       return errorResponse(c, "Current password or code is incorrect.", 403);
     }
+    await passwordConfirmLockout.reset(lockoutKey);
     if (!(await verifySecondFactor(user, { code, recoveryCode }))) {
       return errorResponse(c, "Current password or code is incorrect.", 403);
     }

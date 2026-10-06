@@ -11,8 +11,8 @@ import { prisma } from "../db.js";
 import { recordAudit } from "../lib/audit.js";
 import { createRouter, errorResponses, jsonBody, jsonResponse } from "../lib/openapi.js";
 import { clearBucket, hitBucket } from "../lib/rateLimitStore.js";
-import { buildMeta, errorResponse, successResponse } from "../lib/response.js";
-import { rateLimiter } from "../middleware/rateLimit.js";
+import { errorResponse, successResponse } from "../lib/response.js";
+import { passwordConfirmKey, rateLimiter } from "../middleware/rateLimit.js";
 import {
   forgotPasswordSchema,
   resendVerificationSchema,
@@ -135,15 +135,10 @@ export const recoveryRoutes = router
       });
     });
 
-    return c.json(
-      {
-        success: true as const,
-        message: "If an account exists for that email, a reset link has been sent.",
-        data: null,
-        meta: buildMeta(c),
-      },
-      202,
-    );
+    return successResponse(c, null, {
+      message: "If an account exists for that email, a reset link has been sent.",
+      status: 202,
+    });
   })
   .openapi(resetRoute, async (c) => {
     const { token, password } = c.req.valid("json");
@@ -167,7 +162,10 @@ export const recoveryRoutes = router
       deletePendingAuthTokensOp(user.id),
       ...userSessionRevocationOps(user.id),
     ]);
+    // Unlock the account for the new password: both the login lockout and the password-confirmation
+    // lockout (PUT /api/users/:id, /mfa/setup, /mfa/disable) key on this same account
     await clearBucket(`lockout:${user.email}`);
+    await clearBucket(passwordConfirmKey(user.id));
 
     await recordAudit(c, {
       userId: user.id,
@@ -206,13 +204,8 @@ export const recoveryRoutes = router
       });
     });
 
-    return c.json(
-      {
-        success: true as const,
-        message: "If the account exists and is not verified, a new link has been sent.",
-        data: null,
-        meta: buildMeta(c),
-      },
-      202,
-    );
+    return successResponse(c, null, {
+      message: "If the account exists and is not verified, a new link has been sent.",
+      status: 202,
+    });
   });
