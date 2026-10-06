@@ -48,6 +48,8 @@ model AuthToken {
 
   @@index([userId, type])
   @@index([expiresAt])
+  // The cleanup job purges `expiresAt < now OR usedAt < now`: SQLite needs both branches indexed
+  @@index([usedAt])
 }
 
 /// One-time MFA recovery codes, stored only as SHA-256.
@@ -62,6 +64,8 @@ model RecoveryCode {
 
   // Unique per user only: codes of different users never clash (this index also serves userId lookups)
   @@unique([userId, codeHash])
+  // Cleanup job purges used codes older than the retention window
+  @@index([usedAt])
 }
 
 model Session {
@@ -116,7 +120,8 @@ model Task {
 
   user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@index([userId, deletedAt])
+  // Covers the owner + soft-delete filter and the default `createdAt` ordering of the list
+  @@index([userId, deletedAt, createdAt])
 }
 
 model AuditLog {
@@ -132,10 +137,14 @@ model AuditLog {
 
   user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 
+  // GET /api/audit-logs always sorts by createdAt and may filter by any one of these columns, so
+  // each filter gets its own (column, createdAt) index: a composite with a different leading column
+  // cannot serve the sort (SQLite uses at most one index per table).
   @@index([createdAt])
-  @@index([entity, action])
-  // GET /api/audit-logs filters by userId; the FK SetNull on user delete also needs it
-  @@index([userId])
+  @@index([entity, createdAt])
+  @@index([action, createdAt])
+  // Also needed by the FK SetNull on user delete
+  @@index([userId, createdAt])
 }
 
 /// Fixed-window counters shared by every instance (rate limits and login lockout), so limits hold
