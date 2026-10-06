@@ -131,6 +131,12 @@ export const mfaRoutes = router
       where: { id: user.id },
       data: { totpSecret: encryptSecret(secret), totpLastStep: null },
     });
+    await recordAudit(c, {
+      userId: user.id,
+      action: "MFA_SETUP",
+      entity: "User",
+      entityId: user.id,
+    });
 
     return successResponse(c, { secret, otpauthUrl: otpauthUrl(secret, user.email) });
   })

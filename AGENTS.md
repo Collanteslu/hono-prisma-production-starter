@@ -133,6 +133,7 @@ by the `Login *` post-response scripts and are never written to disk; `environme
 | Path | What |
 |---|---|
 | `src/config/env.ts` | Env schema, cross-field validation, `features` |
+| `src/lib/migrations.ts` | Startup guard: DB migration history vs `prisma/migrations` |
 | `src/index.ts` | Middleware, docs, `GET /`, conditional mounting, `AppType` |
 | `src/lib/openapi.ts` | `createRouter`, route helpers, `whenEnabled` |
 | `src/routes/*.ts` | One chained router per module (`mfa.ts` also exports the admin `userMfaRoutes`) |

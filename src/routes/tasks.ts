@@ -45,10 +45,14 @@ const authErrors = { 401: "Token ausente, inválido o sesión revocada" } as con
 /**
  * With AUTH_MODE=none no 401 can happen, so it is dropped from the published spec. (The route
  * type keeps it: the typed RPC client is generated for the default, authenticated build.)
+ * Returns a shallow copy — the declared route object is never mutated.
  */
 function documentForMode<R extends { responses: object }>(route: R): R {
-  if (!features.auth) delete (route.responses as Record<number, unknown>)[401];
-  return route;
+  if (features.auth) return route;
+  const responses = Object.fromEntries(
+    Object.entries(route.responses as Record<string, unknown>).filter(([code]) => code !== "401"),
+  );
+  return { ...route, responses } as R;
 }
 
 /** The caller as seen by the ownership checks: nobody (ownerless tasks) with AUTH_MODE=none */

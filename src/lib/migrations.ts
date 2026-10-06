@@ -19,8 +19,13 @@ type MigrationRow = {
   finished_at: number | bigint | null;
 };
 
-function sha256OfFile(filePath: string): string {
-  return createHash("sha256").update(readFileSync(filePath)).digest("hex");
+function sha256(content: Buffer): string {
+  return createHash("sha256").update(content).digest("hex");
+}
+
+/** Same SQL regardless of CRLF/LF line endings */
+function normalizeNewlines(content: Buffer): Buffer {
+  return Buffer.from(content.toString("utf8").replace(/\r\n/g, "\n"));
 }
 
 /** Migration folder names on disk, in the order Prisma applies them. */
@@ -67,8 +72,22 @@ export async function assertMigrationsUpToDate(): Promise<void> {
       continue;
     }
     if (row.finished_at === null || row.finished_at === undefined) failed.push(name);
-    const expected = sha256OfFile(path.join(MIGRATIONS_DIR, name, "migration.sql"));
-    if (row.checksum !== expected) modified.push(name);
+    const sqlPath = path.join(MIGRATIONS_DIR, name, "migration.sql");
+    if (!existsSync(sqlPath)) {
+      logger.warn(`Migration folder ${name} has no migration.sql: skipping its checksum check`);
+      continue;
+    }
+    const content = readFileSync(sqlPath);
+    if (row.checksum !== sha256(content)) {
+      // git autocrlf checkout changes the bytes but not the SQL: warn instead of blocking boot
+      if (row.checksum === sha256(normalizeNewlines(content))) {
+        logger.warn(
+          `Migration ${name} differs from the recorded checksum only in line endings (git autocrlf?)`,
+        );
+      } else {
+        modified.push(name);
+      }
+    }
   }
   const untracked = rows.map((row) => row.migration_name).filter((name) => !local.includes(name));
 
