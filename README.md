@@ -125,7 +125,8 @@ hono-prisma-production-starter/
 ## ⚡ Quickstart in 3 Steps
 
 ### Prerequisites
-- **Node.js** v20.0.0 or higher (CI runs on Node 20 LTS)
+- **Node.js** v22.12 or higher (CI runs on Node 22; `vitest@5` requires `^22.12 || ^24 || >=26` and
+  `@scalar/hono-api-reference` requires `>=22`)
 - **npm** v9 or higher
 
 ```bash

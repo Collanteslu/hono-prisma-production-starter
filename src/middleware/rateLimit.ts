@@ -8,9 +8,12 @@
  */
 
 import type { Context, Next } from "hono";
+import { env } from "../config/env.js";
 import { getClientIp } from "../lib/clientIp.js";
 import { logger } from "../lib/logger.js";
 import { clearBucket, hitBucket, peekBucket, slideBucketWindow } from "../lib/rateLimitStore.js";
+import { buildMeta } from "../lib/response.js";
+import type { AppEnv } from "../types/index.js";
 
 /**
  * Creates an IP-based rate limiting middleware.
@@ -19,7 +22,7 @@ import { clearBucket, hitBucket, peekBucket, slideBucketWindow } from "../lib/ra
  * @param maxRequests Maximum allowable requests within the time window
  */
 export function rateLimiter(name: string, windowMs: number = 60_000, maxRequests: number = 10) {
-  return async (c: Context, next: Next) => {
+  return async (c: Context<AppEnv>, next: Next) => {
     // Proxy headers are only honoured when TRUST_PROXY is enabled (see getClientIp)
     const ip = getClientIp(c) || "127.0.0.1";
 
@@ -42,9 +45,10 @@ export function rateLimiter(name: string, windowMs: number = 60_000, maxRequests
 
       return c.json(
         {
-          success: false,
+          success: false as const,
           message: "Too many requests. Please slow down and try again later.",
           retryAfterSeconds: retryAfterSec,
+          meta: buildMeta(c),
         },
         429,
       );
@@ -81,3 +85,17 @@ export function createLoginLockout(maxFailures = 5, lockoutMs = 15 * 60_000) {
     },
   };
 }
+
+/**
+ * Lockout shared by every endpoint that re-confirms the account password: changing the password or
+ * email (`PUT /api/users/:id`) and MFA enrolment/disable. Keyed by account so a stolen access token
+ * cannot buy unlimited attempts by rotating source IPs, and moving between those endpoints does not
+ * reset the counter. Only WRONG confirmations count, so a legitimate client is never throttled.
+ */
+export const passwordConfirmLockout = createLoginLockout(
+  env.LOGIN_LOCKOUT_MAX_FAILURES,
+  env.LOGIN_LOCKOUT_MINUTES * 60_000,
+);
+
+/** Bucket key of one account's failed password confirmations (prefixed by `createLoginLockout`) */
+export const passwordConfirmKey = (userId: string) => `password-confirm:${userId}`;

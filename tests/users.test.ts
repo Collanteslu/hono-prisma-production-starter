@@ -1,4 +1,6 @@
+import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import { env } from "../src/config/env.js";
 import { prisma } from "../src/db.js";
 import { app, bearer, createTestUser, jsonHeaders, login, loginAdmin } from "./helpers.js";
 
@@ -46,6 +48,37 @@ describe("User management", () => {
       headers: bearer(otherDevice.accessToken),
     });
     expect(other.status).toBe(200);
+  });
+
+  it("locks the account after repeated wrong password confirmations, on every endpoint that asks for them", async () => {
+    const user = await createTestUser();
+
+    const changePassword = () =>
+      app.request(`/api/users/${user.user.id}`, {
+        method: "PUT",
+        headers: bearer(user.accessToken),
+        body: JSON.stringify({
+          password: "brand-new-password",
+          currentPassword: "wrong-password",
+        }),
+      });
+
+    for (let attempt = 0; attempt < env.LOGIN_LOCKOUT_MAX_FAILURES; attempt++) {
+      expect((await changePassword()).status).toBe(403);
+    }
+
+    const locked = await changePassword();
+    expect(locked.status).toBe(429);
+    expect((await locked.json()).message).toContain("Too many incorrect password confirmations");
+
+    // The counter is keyed by account, so switching endpoint does not reset it. It is checked
+    // before the password, so even the correct one is refused while the account is locked.
+    const mfaSetup = await app.request("/api/auth/mfa/setup", {
+      method: "POST",
+      headers: bearer(user.accessToken),
+      body: JSON.stringify({ currentPassword: user.password }),
+    });
+    expect(mfaSetup.status).toBe(429);
   });
 
   it("an admin can reset another user's password without knowing the current one", async () => {
@@ -99,6 +132,46 @@ describe("User management", () => {
       body: JSON.stringify({ isBlocked: false }),
     });
     expect(unblock.status).toBe(409);
+  });
+
+  it("permanent deletion cascades sessions, refresh tokens, tasks and emailed tokens", async () => {
+    const admin = await loginAdmin();
+    const user = await createTestUser();
+    // A second device: the cascade must clear more than the session the call is made with
+    await login(user.email, user.password);
+
+    const task = await app.request("/api/tasks", {
+      method: "POST",
+      headers: bearer(user.accessToken),
+      body: JSON.stringify({ title: "Task of a deleted account" }),
+    });
+    expect(task.status).toBe(201);
+    await prisma.authToken.create({
+      data: {
+        userId: user.user.id,
+        type: "email_verify",
+        email: user.email,
+        tokenHash: randomUUID(),
+        expiresAt: new Date(Date.now() + 60_000),
+      },
+    });
+
+    const res = await app.request(`/api/users/${user.user.id}?permanent=true`, {
+      method: "DELETE",
+      headers: bearer(admin.accessToken),
+    });
+    expect(res.status).toBe(200);
+
+    expect(await prisma.user.count({ where: { id: user.user.id } })).toBe(0);
+    expect(await prisma.session.count({ where: { userId: user.user.id } })).toBe(0);
+    expect(await prisma.refreshToken.count({ where: { userId: user.user.id } })).toBe(0);
+    expect(await prisma.task.count({ where: { userId: user.user.id } })).toBe(0);
+    expect(await prisma.authToken.count({ where: { userId: user.user.id } })).toBe(0);
+    // Audit rows outlive the account: SQLite sets their nullable userId to null instead of deleting
+    expect(await prisma.auditLog.count({ where: { userId: user.user.id } })).toBe(0);
+    expect(
+      await prisma.auditLog.count({ where: { entityId: user.user.id, userId: null } }),
+    ).toBeGreaterThan(0);
   });
 
   it("the last active administrator cannot delete their own account", async () => {

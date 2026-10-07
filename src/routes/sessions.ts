@@ -1,7 +1,8 @@
 /**
  * @file sessions.ts
  * @description Session management routes.
- * Allows users to inspect all active sessions across devices, terminate specific sessions,
+ * Allows users to inspect every session recorded for their account (the purge of expired and
+ * long-inactive rows is left to the cleanup job), terminate specific sessions,
  * or revoke all active sessions immediately.
  */
 
@@ -21,7 +22,8 @@ const listRoute = createRoute({
   path: "/me",
   tags: ["Sessions"],
   summary: "Listar sesiones del usuario actual",
-  description: "Devuelve todos los dispositivos y sesiones abiertas por el usuario autenticado.",
+  description:
+    "Devuelve todos los dispositivos con sesión registrada por el usuario autenticado, incluidas las sesiones ya revocadas o caducadas que la tarea de limpieza aún no ha purgado.",
   security: secured,
   responses: {
     200: jsonResponse(sessionListResponseSchema, "Sesiones del usuario"),

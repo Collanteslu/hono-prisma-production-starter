@@ -43,14 +43,17 @@ const security = features.auth ? secured : [];
 const authErrors = { 401: "Token ausente, inválido o sesión revocada" } as const;
 
 /**
- * With AUTH_MODE=none no 401 can happen, so it is dropped from the published spec. (The route
- * type keeps it: the typed RPC client is generated for the default, authenticated build.)
+ * With AUTH_MODE=none no 401 can happen and no caller is an admin, so both are dropped from the
+ * published spec (`userId`/`scope=all` answer 400 there instead). (The route type keeps them: the
+ * typed RPC client is generated for the default, authenticated build.)
  * Returns a shallow copy — the declared route object is never mutated.
  */
 function documentForMode<R extends { responses: object }>(route: R): R {
   if (features.auth) return route;
   const responses = Object.fromEntries(
-    Object.entries(route.responses as Record<string, unknown>).filter(([code]) => code !== "401"),
+    Object.entries(route.responses as Record<string, unknown>).filter(
+      ([code]) => code !== "401" && code !== "403",
+    ),
   );
   return { ...route, responses } as R;
 }
@@ -118,6 +121,7 @@ const getRoute = documentForMode(
     responses: {
       200: jsonResponse(successSchema(taskSchema), "Tarea"),
       ...errorResponses({
+        400: "Parámetros de consulta inválidos",
         ...authErrors,
         404: "Tarea no encontrada (o pertenece a otro usuario)",
       }),
@@ -200,6 +204,7 @@ const deleteRoute = documentForMode(
         "Tarea eliminada (soft delete o permanente)",
       ),
       ...errorResponses({
+        400: "Parámetros de consulta inválidos",
         ...authErrors,
         404: "Tarea no encontrada (o ya eliminada, salvo con `permanent=true`)",
       }),
