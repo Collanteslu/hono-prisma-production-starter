@@ -79,7 +79,8 @@ hono-prisma-production-starter/
 ├── src/
 │   ├── config/env.ts                 # Zod-validated environment variables (fails fast on bad config), AUTH_MODE `features`
 │   ├── db.ts                         # Prisma 7 client (password hashes omitted globally) & dev seeder
-│   ├── index.ts                      # Entrypoint: global middleware, OpenAPI docs, error handling, shutdown
+│   ├── app.ts                        # The Hono app: global middleware, OpenAPI docs, routes, error handling (no side effects)
+│   ├── index.ts                      # Entrypoint: startup checks, seed, cleanup job, HTTP listener, graceful shutdown
 │   ├── jobs/cleanup.ts               # Background purge of expired sessions, rotated/emailed tokens, used recovery codes, old audit logs
 │   ├── lib/
 │   │   ├── audit.ts                  # recordAudit() helper
@@ -201,7 +202,7 @@ AUTH_MODE=none npm run dev    # public API, no secrets needed
 AUTH_MODE=basic npm run dev   # accounts and sessions, no email/2FA
 ```
 
-> Code that depends on the mode reads the flags `features.auth` / `features.accountSecurity` from `src/config/env.ts`; modules are mounted with `whenEnabled(flag, router)` in `src/index.ts`. See [`AGENTS.md`](AGENTS.md#authentication-modes-auth_mode).
+> Code that depends on the mode reads the flags `features.auth` / `features.accountSecurity` from `src/config/env.ts`; modules are mounted with `whenEnabled(flag, router)` in `src/app.ts`. See [`AGENTS.md`](AGENTS.md#authentication-modes-auth_mode).
 
 ---
 
@@ -210,7 +211,7 @@ AUTH_MODE=basic npm run dev   # accounts and sessions, no email/2FA
 1. Click **"Use this template" → "Create a new repository"** on GitHub, then clone your new repository.
 2. **Rename the project**:
    - `package.json`: `name`, `description`, `version` (keep `src/lib/version.ts` in sync), `author`, `repository`.
-   - `src/index.ts`: the `GET /` `name` and the OpenAPI `info.title` / `description`.
+   - `src/app.ts`: the `GET /` `name` and the OpenAPI `info.title` / `description`.
    - `docker-compose.yml`: `container_name`.
    - This README (title, badges pointing at `Collanteslu/hono-prisma-production-starter`) and `LICENSE` holder.
 3. **Pick an auth level** with `AUTH_MODE` (see above) and create your `.env` from `.env.example`:
@@ -231,7 +232,7 @@ AUTH_MODE=basic npm run dev   # accounts and sessions, no email/2FA
 
 `AUTH_MODE` already keeps unused modules out of the running API, so deleting code is optional. If you want a leaner codebase, remove them from the top down and let `npm run typecheck` guide you:
 
-- **2FA (MFA)**: `src/routes/mfa.ts` (+ its two mounts in `src/index.ts`), `src/services/mfa.ts`, `src/lib/totp.ts`, the second-factor block of the login handler and `totpCode`/`recoveryCode` in the login schema, the MFA schemas in `src/schemas/`, `MFA_*` env variables, `bruno/Auth/MFA *.bru` and `bruno/Users/Reset User MFA (Admin).bru`, the MFA tests in `tests/account-security*.test.ts`. Schema: `RecoveryCode` and the `totp*` columns of `User` (plus the purge in `src/jobs/cleanup.ts`).
+- **2FA (MFA)**: `src/routes/mfa.ts` (+ its two mounts in `src/app.ts`), `src/services/mfa.ts`, `src/lib/totp.ts`, the second-factor block of the login handler and `totpCode`/`recoveryCode` in the login schema, the MFA schemas in `src/schemas/`, `MFA_*` env variables, `bruno/Auth/MFA *.bru` and `bruno/Users/Reset User MFA (Admin).bru`, the MFA tests in `tests/account-security*.test.ts`. Schema: `RecoveryCode` and the `totp*` columns of `User` (plus the purge in `src/jobs/cleanup.ts`).
 - **Email verification and password recovery**: `src/routes/recovery.ts` (+ mount), `src/services/accountMail.ts`, `src/services/authTokens.ts`, `src/lib/mailer.ts`, the `sendVerificationEmail` / `deletePendingAuthTokensOp` calls in `auth.ts` and `users.ts`, the `MAIL_*`/`SMTP_URL`/`APP_URL`/`*_TTL_*`/`REQUIRE_EMAIL_VERIFICATION` variables, `npm uninstall nodemailer @types/nodemailer`, the matching Bruno requests and tests (`tests/email-verification-required.test.ts`). Schema: `AuthToken` and `User.emailVerifiedAt`.
 - **All authentication** (a permanent `none`): the routes `auth`, `recovery`, `mfa`, `sessions`, `users`, `audit`, `src/middleware/auth.ts`, `src/services/`, `src/utils/password.ts`, `src/lib/totp.ts`, `src/lib/mailer.ts`, the login rate limiters/lockout, the `JWT_*` and `ADMIN_*` variables, the user seeder in `src/db.ts`, the ownership helpers (`viewerOf`, `secured`) in your resources and the corresponding tests and Bruno folders. Schema: `User`, `Session`, `RefreshToken`, `AuthToken`, `RecoveryCode` and `Task.userId`.
 
@@ -346,11 +347,11 @@ Created automatically **only when `NODE_ENV` is not `production`** and the datab
 
 ## ⚡ Type-Safe RPC Client (`hc`)
 
-The starter exports `AppType` from `src/index.ts`. Any TypeScript frontend (Next.js, Vite, React, Astro, mobile) can consume the `/api/*` routes with **end-to-end static type safety** — request params, query, JSON bodies and per-status response bodies — without manual type generation or Swagger codegen:
+The starter exports `AppType` from `src/app.ts` (also re-exported by `src/index.ts`). Any TypeScript frontend (Next.js, Vite, React, Astro, mobile) can consume the `/api/*` routes with **end-to-end static type safety** — request params, query, JSON bodies and per-status response bodies — without manual type generation or Swagger codegen:
 
 ```ts
 import { hc } from "hono/client";
-import type { AppType } from "./src/index.js";
+import type { AppType } from "./src/app.js";
 
 const client = hc<AppType>("http://localhost:3011", {
   headers: { Authorization: `Bearer ${accessToken}` },

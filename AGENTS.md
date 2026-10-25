@@ -55,7 +55,7 @@ How it is wired, so new code follows the same pattern:
 
 - `features` (exported from `src/config/env.ts`) is the only switch: `features.auth` (basic or full) and
   `features.accountSecurity` (full). Do not compare `env.AUTH_MODE` strings around the code.
-- `src/index.ts` mounts every module through `whenEnabled(flag, router)` (`src/lib/openapi.ts`). A disabled
+- `src/app.ts` mounts every module through `whenEnabled(flag, router)` (`src/lib/openapi.ts`). A disabled
   module is replaced by an empty router, so it adds no route and nothing to the spec, while the chained
   `app.route(...)` keeps its type: `AppType` always describes the full build.
 - Cross-field rules belong in the `superRefine` of `src/config/env.ts` (JWT secrets required unless
@@ -78,7 +78,7 @@ How it is wired, so new code follows the same pattern:
    import `z` from `@hono/zod-openapi` there.
 3. **Chained routers:** export each router as ONE chained expression
    (`createRouter().openapi(a, …).openapi(b, …)`) and mount it in the chained `app.route(...)` of
-   `src/index.ts`, keeping `export type AppType = typeof routes;`. Standalone `router.openapi(...)`
+   `src/app.ts`, keeping `export type AppType = typeof routes;`. Standalone `router.openapi(...)`
    statements silently break `hc<AppType>` (`tests/rpc.test.ts` and `npm run typecheck` catch it).
 4. **Envelope:** `successResponse(c, data, { status, message, pagination })` / `errorResponse(c, message,
    status)` and `buildPagination()` from `src/lib/response.ts`. Never return raw objects without `success`
@@ -137,7 +137,8 @@ requests in sync by hand.
 |---|---|
 | `src/config/env.ts` | Env schema, cross-field validation, `features` |
 | `src/lib/migrations.ts` | Startup guard: DB migration history vs `prisma/migrations` |
-| `src/index.ts` | Middleware, docs, `GET /`, conditional mounting, `AppType` |
+| `src/app.ts` | The Hono app: middleware, docs, `GET /`, conditional mounting, error handlers, `AppType` (no side effects; tests import it) |
+| `src/index.ts` | Process entry point: startup checks, seed, cleanup job, `serve()`, graceful shutdown. No `default` export (Bun would serve it a second time) |
 | `src/lib/openapi.ts` | `createRouter`, route helpers, `whenEnabled` |
 | `src/routes/*.ts` | One chained router per module (`mfa.ts` also exports the admin `userMfaRoutes`) |
 | `src/services/` | Sessions/tokens, emailed tokens, MFA |

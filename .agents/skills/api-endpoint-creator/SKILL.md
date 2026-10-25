@@ -79,7 +79,7 @@ Use this skill whenever adding new routes or domain entities to the API.
      ```
    - Return errors with `errorResponse(c, message, status)`; the compiler only accepts status codes declared in `responses`.
    - Admin-only routes: `middleware: [requireAdmin] as const` in `createRoute`. Owned resources: check `resource.userId === c.get('user').userId`. Record audit events with `recordAudit()`.
-4. **Mount Route in `src/index.ts`**:
+4. **Mount Route in `src/app.ts`**:
    - Add the prefix to the authentication list (only applied when `features.auth`, i.e. `AUTH_MODE` is `basic` or `full`) and chain the router into `routes` (keep `AppType = typeof routes`):
      ```typescript
      if (features.auth) {

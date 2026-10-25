@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import app from "../src/index.js";
+import app from "../src/app.js";
 
 describe("Tasks CRUD & Ownership API", () => {
   let userToken = "";

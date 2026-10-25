@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import app from "../src/index.js";
+import app from "../src/app.js";
 
 export { app };
 
