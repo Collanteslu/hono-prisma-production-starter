@@ -7,8 +7,8 @@ runbooks live in [`.agents/skills/`](.agents/skills/), and the [README](README.m
 reference (endpoints, configuration, security model).
 
 **Stack:** Hono v4 · Prisma 7 with the libSQL driver adapter (SQLite file locally, optionally Turso) ·
-Zod 4 + `@hono/zod-openapi` · Vitest · Biome · Node.js 22 (`engines.node >=22.12`; the Docker base image is still
-`node:20-alpine` — bump it together with a `docker run` smoke test before deploying).
+Zod 4 + `@hono/zod-openapi` · Vitest · Biome · Node.js (`engines.node >=22.12`; CI tests Node 22; the
+Docker image is `node:24-alpine`, pinned by digest — bump it together with `scripts/docker-smoke.sh`).
 
 ## Install and run
 
@@ -34,11 +34,14 @@ npx prisma migrate diff --from-migrations prisma/migrations --to-schema prisma/s
 npm run typecheck                    # source + tests, including the typed hc<AppType> client
 npm run lint
 npm run build
-npm audit --omit=dev --audit-level=high
+npm audit --audit-level=high         # all dependencies, dev tooling included
 npm run test:coverage                # or `npm test`
 ```
 
-CI (`.github/workflows/ci.yml`) runs the same list plus a Docker image build. Tests create, migrate and
+CI (`.github/workflows/ci.yml`) runs the same list. The image has its own check, `scripts/docker-smoke.sh`: it runs the image
+with `--read-only`, applies the migrations, signs in the seeded admin and waits for the `HEALTHCHECK`.
+Run the smoke test locally after touching the `Dockerfile` or the entrypoint: `docker build -t hono-api:ci . &&
+scripts/docker-smoke.sh hono-api:ci`. Tests create, migrate and
 delete their own temporary SQLite database (`tests/setup/global-setup.ts`), so `dev.db` is never touched.
 `npm run test:e2e` (`test-api.sh`) is an optional curl suite against a running dev server: it needs the
 demo accounts and `AUTH_MODE=full`.

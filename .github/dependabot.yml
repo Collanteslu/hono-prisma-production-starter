@@ -13,7 +13,7 @@ updates:
     schedule:
       interval: "weekly"
 
-  # Renews the SHA pins in .github/workflows/ci.yml (with the tag as a comment)
+  # Keeps the Actions used in .github/workflows up to date
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

@@ -56,7 +56,7 @@ hono-prisma-production-starter/
 ├── AGENTS.md                         # Guide for AI agents and contributors (install, checks, conventions, safety)
 ├── .env.example                      # Environment template (secrets intentionally blank)
 ├── .github/
-│   ├── workflows/ci.yml              # CI: audit, migration drift, typecheck, build, lint, tests + coverage, Docker image build
+│   ├── workflows/ci.yml              # CI: audit, migration drift, typecheck, build, lint, tests + coverage
 │   ├── ISSUE_TEMPLATE/               # Bug report & feature request forms
 │   └── PULL_REQUEST_TEMPLATE.md      # Standard PR checklist
 ├── .agents/skills/                   # Runbooks for AI assistants and contributors
@@ -115,7 +115,7 @@ hono-prisma-production-starter/
 │   └── *.test.ts                     # auth, security, users, tasks, account security, auth modes, unit, health, openapi, rpc
 ├── test-api.sh                       # End-to-end bash suite against a running server
 ├── biome.json                        # Linter / formatter configuration
-├── Dockerfile                        # Multi-stage production image (non-root, HEALTHCHECK)
+├── Dockerfile                        # Multi-stage production image (node:24-alpine, non-root, HEALTHCHECK, runs with --read-only)
 ├── docker-entrypoint.sh              # Applies migrations, then starts the server
 ├── docker-compose.yml                # Production Compose configuration
 └── LICENSE                           # MIT License
@@ -126,8 +126,8 @@ hono-prisma-production-starter/
 ## ⚡ Quickstart in 3 Steps
 
 ### Prerequisites
-- **Node.js** v22.12 or higher (CI runs on Node 22; `vitest@5` requires `^22.12 || ^24 || >=26` and
-  `@scalar/hono-api-reference` requires `>=22`)
+- **Node.js** v22.12 or higher (the Docker image runs Node 24; `vitest@5` requires
+  `^22.12 || ^24 || >=26` and `@scalar/hono-api-reference` requires `>=22`)
 - **npm** v9 or higher
 
 ```bash
@@ -615,7 +615,7 @@ An empty value (`VAR=`) is treated as unset, which is what lets Docker Compose f
 
 ## 🐳 Docker Deployment
 
-The template includes an optimized multi-stage `Dockerfile` (Alpine-based, non-root user, `HEALTHCHECK` on `/healthz`) and `docker-compose.yml`. Secrets are **never** committed: Compose refuses to start unless `JWT_SECRET` and `JWT_REFRESH_SECRET` are provided (with `AUTH_MODE=none` they are unused: set any value or remove those two lines from your copy).
+The template includes an optimized multi-stage `Dockerfile` (Alpine-based on Node 24, non-root user, `HEALTHCHECK` on `/healthz`, no npm in the runtime image) and a hardened `docker-compose.yml` (read-only root filesystem with a tmpfs `/tmp`, all capabilities dropped, `no-new-privileges`, memory/CPU limits, port published on `127.0.0.1` only). Secrets are **never** committed: Compose refuses to start unless `JWT_SECRET` and `JWT_REFRESH_SECRET` are provided (with `AUTH_MODE=none` they are unused: set any value or remove those two lines from your copy).
 
 > **Use a dedicated env file for production.** Docker Compose automatically reads a `.env` file next to `docker-compose.yml`, which in a development checkout holds your *development* secrets. Keep production values in a separate file and pass it explicitly. `.env.*` files are git-ignored.
 
@@ -639,6 +639,8 @@ docker compose --env-file .env.production down
 ```
 
 Compose evaluates the whole file on every command, so pass `--env-file` to all of them (or `export COMPOSE_ENV_FILES=.env.production` once). The compose file forwards every variable of the [Configuration](#-configuration) table except `PORT` (fixed to `3011` inside the container) and `DATABASE_URL` (fixed to `file:/app/data/prod.db` on the persistent volume; the image also defaults to it, so even `docker run` without the variable keeps data on the volume). The named volume `sqlite_data` keeps your SQLite database across restarts, and on startup the entrypoint runs `prisma migrate deploy` (see [Database migrations](#database-migrations)). Docs are off in production unless you set `ENABLE_DOCS=true`.
+
+The container runs fine with `docker run --read-only --tmpfs /tmp -v <volume>:/app/data ...`: the Prisma schema engine is downloaded when the image is built, not on first start. The published port is bound to `127.0.0.1`; put a reverse proxy on the same host in front of it (or attach the service to the proxy's network instead of publishing the port). `scripts/docker-smoke.sh <image>` runs this exact check, and CI runs it on every push.
 
 **Backups:** the image has no `sqlite3` binary. Back up the volume with a throwaway container (replace `<project>_sqlite_data` with the volume name shown by `docker volume ls`):
 
