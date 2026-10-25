@@ -4,7 +4,7 @@
 # Node 24 (LTS): dentro de engines.node (>=22.12) y alineado con la CI. Base fijada por
 # digest (builds reproducibles): actualízala junto con un smoke test de `docker run`
 # (Dependabot propone el bump semanalmente, ver .github/dependabot.yml)
-FROM node:24-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS builder
+FROM node:26-alpine@sha256:40cd011b55415bc894e45b02fdd5a5dfde056921b7d23a64c74f80497af48797 AS builder
 
 WORKDIR /app
 
@@ -27,7 +27,7 @@ RUN npm run build
 # ==========================================
 # Etapa 2: Imagen Final Ligera para Producción
 # ==========================================
-FROM node:24-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS runner
+FROM node:26-alpine@sha256:40cd011b55415bc894e45b02fdd5a5dfde056921b7d23a64c74f80497af48797 AS runner
 
 WORKDIR /app
 
