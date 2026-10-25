@@ -66,10 +66,16 @@ app.use("*", requestIdMiddleware);
 // 2. HTTP Security: Injects HSTS, XSS Protection, CSP, No-Sniff, and Frameguard headers
 app.use("*", secureHeaders());
 
-// 3. HTTP access logger with response time calculation (routed through the structured Pino logger)
+// 3. HTTP access logger with response time calculation (routed through the structured Pino logger).
+// hono/logger colours the status code with ANSI escapes; they are noise in the JSON lines that
+// log aggregators ingest in production (and break grep/jq on the message), so they are stripped.
+const ANSI_ESCAPES = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
 app.use(
   "*",
-  logger((message, ...rest) => appLogger.info([message, ...rest].join(" "))),
+  logger((message, ...rest) => {
+    const line = [message, ...rest].join(" ");
+    appLogger.info(env.NODE_ENV === "production" ? line.replace(ANSI_ESCAPES, "") : line);
+  }),
 );
 
 // 4. Cross-Origin Resource Sharing (CORS) configuration (origins configurable via CORS_ORIGINS)
@@ -108,7 +114,8 @@ app.use(
  * -------------------------------------------------------------
  */
 // Documentation is enabled by default outside production (override with ENABLE_DOCS)
-if (env.ENABLE_DOCS ?? env.NODE_ENV !== "production") {
+const docsEnabled = env.ENABLE_DOCS ?? env.NODE_ENV !== "production";
+if (docsEnabled) {
   // OpenAPI 3.0 specification generated from the route definitions and Zod schemas
   app.doc("/openapi.json", {
     openapi: "3.0.3",
@@ -209,10 +216,11 @@ app.get("/", (c) => {
     name: "Production REST API Template with Hono, Prisma 7, SQLite & Stateful Sessions",
     version: API_VERSION,
     authMode: env.AUTH_MODE,
-    documentationUrl: "/docs",
+    // Only advertised when the docs are actually served (they are off in production by default)
+    ...(docsEnabled && { documentationUrl: "/docs" }),
     endpoints: {
       healthcheck: "/healthz",
-      documentation: "/docs",
+      ...(docsEnabled && { documentation: "/docs" }),
       ...(features.auth && {
         auth: {
           register: "POST /api/auth/register",

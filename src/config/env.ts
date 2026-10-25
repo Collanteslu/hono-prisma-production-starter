@@ -8,8 +8,9 @@ import { randomBytes } from "node:crypto";
 import dotenv from "dotenv";
 import { z } from "zod";
 
-// Load variables from local .env file
-dotenv.config();
+// Load variables from local .env file (quiet: dotenv 17+ prints an "injected env" banner into
+// stdout otherwise, which lands in the middle of the JSON log stream)
+dotenv.config({ quiet: true });
 
 /**
  * Strict schema validation for environment configuration.
