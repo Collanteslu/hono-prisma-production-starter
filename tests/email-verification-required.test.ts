@@ -2,14 +2,14 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 // REQUIRE_EMAIL_VERIFICATION is read once at startup, so this file loads the app with it enabled
-type App = typeof import("../src/index.js")["default"];
+type App = typeof import("../src/app.js")["default"];
 let app: App;
 let outbox: typeof import("../src/lib/mailer.js")["outbox"];
 
 beforeAll(async () => {
   vi.stubEnv("REQUIRE_EMAIL_VERIFICATION", "true");
   vi.resetModules();
-  app = (await import("../src/index.js")).default;
+  app = (await import("../src/app.js")).default;
   outbox = (await import("../src/lib/mailer.js")).outbox;
 });
 

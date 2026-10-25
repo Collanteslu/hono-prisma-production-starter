@@ -1,7 +1,10 @@
 # ==========================================
 # Etapa 1: Dependencias y Compilación
 # ==========================================
-FROM node:20-alpine AS builder
+# Node 24 (LTS): dentro de engines.node (>=22.12) y alineado con la CI. Base fijada por
+# digest (builds reproducibles): actualízala junto con un smoke test de `docker run`
+# (Dependabot propone el bump semanalmente, ver .github/dependabot.yml)
+FROM node:24-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS builder
 
 WORKDIR /app
 
@@ -24,7 +27,7 @@ RUN npm run build
 # ==========================================
 # Etapa 2: Imagen Final Ligera para Producción
 # ==========================================
-FROM node:20-alpine AS runner
+FROM node:24-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS runner
 
 WORKDIR /app
 
@@ -45,11 +48,31 @@ COPY --chown=node:node prisma ./prisma/
 COPY --chown=node:node docker-entrypoint.sh ./
 RUN chmod +x docker-entrypoint.sh
 
-# Instalar dependencias de producción (deshabilitando prepare/husky en entorno CI/Docker)
+# Instalar dependencias de producción (deshabilitando prepare/husky en entorno CI/Docker).
+# `prisma` es dependencia de producción: el entrypoint aplica migraciones en el arranque.
 USER node
 ENV HUSKY=0
-RUN npm ci --omit=dev --ignore-scripts
-
+# Una sola capa (`RUN`): lo que se borra aquí no queda almacenado en una capa anterior.
+#  1. --ignore-scripts también bloqueó la descarga del schema-engine que `prisma migrate
+#     deploy` necesita: sin él, el primer arranque intenta descargarlo y FALLA con el sistema
+#     de ficheros de solo lectura (`docker run --read-only`). Se reconstruyen SOLO los
+#     paquetes de Prisma en el build (scripts puntuales, sin reactivar prepare/husky).
+#  2. `typescript` entra en producción como peer opcional de Prisma y, desde TypeScript 7,
+#     trae el compilador nativo (~27 MB, con CVEs de Go que aquí no se ejecutan). Prisma no
+#     lo necesita para migrar ni para ejecutar el cliente: se elimina del runtime.
+RUN npm ci --omit=dev --ignore-scripts \
+  && npm rebuild @prisma/engines prisma \
+  && rm -rf node_modules/typescript node_modules/@typescript \
+  && npm cache clean --force
+# El runtime solo necesita node: se elimina el toolchain npm. Además de reducir la
+# superficie, retira de la imagen las dependencias que npm vendoriza consigo mismo
+# (tar, undici, brace-expansion… — con CVEs propios que Trivy detecta y que esta plantilla
+# no puede actualizar: son del npm de la imagen base). El entrypoint ejecuta la CLI de
+# Prisma con `node node_modules/prisma/build/index.js` (sin npx).
+USER root
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack /opt/yarn-* \
+  && rm -f /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack /usr/local/bin/yarn /usr/local/bin/yarnpkg
+USER node
 
 # Copiar el código compilado y el cliente generado de Prisma
 COPY --chown=node:node --from=builder /app/dist ./dist
@@ -63,4 +86,3 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
 
 ENTRYPOINT ["./docker-entrypoint.sh"]
 CMD ["node", "dist/index.js"]
-

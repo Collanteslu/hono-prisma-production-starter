@@ -7,8 +7,8 @@ runbooks live in [`.agents/skills/`](.agents/skills/), and the [README](README.m
 reference (endpoints, configuration, security model).
 
 **Stack:** Hono v4 · Prisma 7 with the libSQL driver adapter (SQLite file locally, optionally Turso) ·
-Zod 4 + `@hono/zod-openapi` · Vitest · Biome · Node.js 22 (`engines.node >=22.12`; the Docker base image is still
-`node:20-alpine` — bump it together with a `docker run` smoke test before deploying).
+Zod 4 + `@hono/zod-openapi` · Vitest · Biome · Node.js (`engines.node >=22.12`; CI tests Node 22; the
+Docker image is `node:24-alpine`, pinned by digest — bump it together with `scripts/docker-smoke.sh`).
 
 ## Install and run
 
@@ -34,11 +34,14 @@ npx prisma migrate diff --from-migrations prisma/migrations --to-schema prisma/s
 npm run typecheck                    # source + tests, including the typed hc<AppType> client
 npm run lint
 npm run build
-npm audit --omit=dev --audit-level=high
+npm audit --audit-level=high         # all dependencies, dev tooling included
 npm run test:coverage                # or `npm test`
 ```
 
-CI (`.github/workflows/ci.yml`) runs the same list plus a Docker image build. Tests create, migrate and
+CI (`.github/workflows/ci.yml`) runs the same list. The image has its own check, `scripts/docker-smoke.sh`: it runs the image
+with `--read-only`, applies the migrations, signs in the seeded admin and waits for the `HEALTHCHECK`.
+Run the smoke test locally after touching the `Dockerfile` or the entrypoint: `docker build -t hono-api:ci . &&
+scripts/docker-smoke.sh hono-api:ci`. Tests create, migrate and
 delete their own temporary SQLite database (`tests/setup/global-setup.ts`), so `dev.db` is never touched.
 `npm run test:e2e` (`test-api.sh`) is an optional curl suite against a running dev server: it needs the
 demo accounts and `AUTH_MODE=full`.
@@ -55,7 +58,7 @@ How it is wired, so new code follows the same pattern:
 
 - `features` (exported from `src/config/env.ts`) is the only switch: `features.auth` (basic or full) and
   `features.accountSecurity` (full). Do not compare `env.AUTH_MODE` strings around the code.
-- `src/index.ts` mounts every module through `whenEnabled(flag, router)` (`src/lib/openapi.ts`). A disabled
+- `src/app.ts` mounts every module through `whenEnabled(flag, router)` (`src/lib/openapi.ts`). A disabled
   module is replaced by an empty router, so it adds no route and nothing to the spec, while the chained
   `app.route(...)` keeps its type: `AppType` always describes the full build.
 - Cross-field rules belong in the `superRefine` of `src/config/env.ts` (JWT secrets required unless
@@ -78,7 +81,7 @@ How it is wired, so new code follows the same pattern:
    import `z` from `@hono/zod-openapi` there.
 3. **Chained routers:** export each router as ONE chained expression
    (`createRouter().openapi(a, …).openapi(b, …)`) and mount it in the chained `app.route(...)` of
-   `src/index.ts`, keeping `export type AppType = typeof routes;`. Standalone `router.openapi(...)`
+   `src/app.ts`, keeping `export type AppType = typeof routes;`. Standalone `router.openapi(...)`
    statements silently break `hc<AppType>` (`tests/rpc.test.ts` and `npm run typecheck` catch it).
 4. **Envelope:** `successResponse(c, data, { status, message, pagination })` / `errorResponse(c, message,
    status)` and `buildPagination()` from `src/lib/response.ts`. Never return raw objects without `success`
@@ -137,7 +140,8 @@ requests in sync by hand.
 |---|---|
 | `src/config/env.ts` | Env schema, cross-field validation, `features` |
 | `src/lib/migrations.ts` | Startup guard: DB migration history vs `prisma/migrations` |
-| `src/index.ts` | Middleware, docs, `GET /`, conditional mounting, `AppType` |
+| `src/app.ts` | The Hono app: middleware, docs, `GET /`, conditional mounting, error handlers, `AppType` (no side effects; tests import it) |
+| `src/index.ts` | Process entry point: startup checks, seed, cleanup job, `serve()`, graceful shutdown. No `default` export (Bun would serve it a second time) |
 | `src/lib/openapi.ts` | `createRouter`, route helpers, `whenEnabled` |
 | `src/routes/*.ts` | One chained router per module (`mfa.ts` also exports the admin `userMfaRoutes`) |
 | `src/services/` | Sessions/tokens, emailed tokens, MFA |

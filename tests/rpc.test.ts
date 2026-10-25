@@ -1,6 +1,6 @@
 import { hc } from "hono/client";
 import { describe, expect, it } from "vitest";
-import type { AppType } from "../src/index.js";
+import type { AppType } from "../src/app.js";
 import { app, createTestUser } from "./helpers.js";
 
 /**

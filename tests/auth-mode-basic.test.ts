@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 // AUTH_MODE is read once at startup, so this file loads the app with AUTH_MODE=basic
-type App = typeof import("../src/index.js")["default"];
+type App = typeof import("../src/app.js")["default"];
 let app: App;
 let outbox: typeof import("../src/lib/mailer.js")["outbox"];
 let prisma: typeof import("../src/db.js")["prisma"];
@@ -10,7 +10,7 @@ let prisma: typeof import("../src/db.js")["prisma"];
 beforeAll(async () => {
   vi.stubEnv("AUTH_MODE", "basic");
   vi.resetModules();
-  app = (await import("../src/index.js")).default;
+  app = (await import("../src/app.js")).default;
   outbox = (await import("../src/lib/mailer.js")).outbox;
   prisma = (await import("../src/db.js")).prisma;
 });

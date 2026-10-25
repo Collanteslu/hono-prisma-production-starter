@@ -12,16 +12,18 @@ case "$DATABASE_URL" in
     ;;
 esac
 
-# Aplicar migraciones versionadas (nunca "db push" en producción)
+# Aplicar migraciones versionadas (nunca "db push" en producción). Sin toolchain npm en la
+# imagen: la CLI de Prisma se ejecuta directamente con node.
+PRISMA="node node_modules/prisma/build/index.js"
 echo "🚀 Aplicando migraciones de base de datos..."
-if ! OUTPUT=$(npx prisma migrate deploy 2>&1); then
+if ! OUTPUT=$($PRISMA migrate deploy 2>&1); then
   echo "$OUTPUT"
   # P3005: base de datos existente creada con "db push" (versiones anteriores de la plantilla).
   # Se marca la migración inicial como aplicada (baseline) y se aplican las siguientes.
   if echo "$OUTPUT" | grep -q "P3005"; then
     echo "🧱 Base de datos existente sin historial de migraciones: aplicando baseline 0_init..."
-    npx prisma migrate resolve --applied 0_init
-    npx prisma migrate deploy
+    $PRISMA migrate resolve --applied 0_init
+    $PRISMA migrate deploy
   else
     exit 1
   fi

@@ -52,7 +52,7 @@ Follow the `api-endpoint-creator` skill: one `createRoute(...)` per operation, i
 - `PUT /api/<models>/{id}`: Entity update and 404 handling.
 - `DELETE /api/<models>/{id}`: Entity deletion with cascading protection (prefer soft delete + `?permanent=true` like tasks).
 
-### Step 5: Mount Route in Application (`src/index.ts`)
+### Step 5: Mount Route in Application (`src/app.ts`)
 Add the prefix to the `authMiddleware` list and chain the router onto `routes`:
 ```ts
 const routes = app

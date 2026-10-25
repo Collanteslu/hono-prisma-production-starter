@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
+import app from "../src/app.js";
 import { prisma } from "../src/db.js";
-import app from "../src/index.js";
 import { hashToken } from "../src/services/sessions.js";
 import { createTestUser, jsonHeaders } from "./helpers.js";
 

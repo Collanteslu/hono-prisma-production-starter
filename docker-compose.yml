@@ -6,7 +6,22 @@ services:
     container_name: hono_rest_api
     restart: unless-stopped
     ports:
-      - "3011:3011"
+      # Publicado SOLO en localhost: el contenedor nunca escucha en todas las interfaces del
+      # host. Detrás de un proxy en el mismo host esto basta (el proxy es el único cliente).
+      # Para exponerlo a una red interna, conecta el servicio a la red del proxy en lugar de
+      # publicar el puerto, y termina TLS en el proxy, no en el contenedor.
+      - "127.0.0.1:3011:3011"
+    # Endurecimiento del contenedor: sistema de ficheros de solo lectura (la única ruta
+    # escribible es el volumen de datos y /tmp), sin privilegios ni capabilities, con límites
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 512m
+    cpus: "1.0"
     environment:
       - PORT=3011
       - NODE_ENV=production

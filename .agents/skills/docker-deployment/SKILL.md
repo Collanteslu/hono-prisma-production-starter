@@ -13,10 +13,12 @@ Standard procedures for building, deploying and maintaining the containerized RE
 ## 1. Multi-Stage Dockerfile Architecture
 
 Two stages:
-1. **builder** (`node:20-alpine`): `npm ci`, `prisma generate`, `npm run build` → `dist/`.
-2. **runner** (`node:20-alpine`):
+1. **builder** (`node:24-alpine`, pinned by digest): `npm ci`, `prisma generate`, `npm run build` → `dist/`.
+2. **runner** (same pinned `node:24-alpine`):
    - `NODE_ENV=production`, runs as the non-root `node` user.
    - Contains only production dependencies, `dist/`, the generated Prisma client, `prisma/` (schema + migrations) and the entrypoint.
+   - The Prisma schema engine is downloaded **at build time** (`npm rebuild @prisma/engines prisma` after `npm ci --ignore-scripts`). Without it the first start tries to download it and fails on a read-only filesystem.
+   - npm, corepack and yarn are deleted from the runtime image (no `npx`: the entrypoint runs `node node_modules/prisma/build/index.js`), and so is `typescript` (an optional Prisma peer that ships a native compiler). Do not reintroduce `npx`/`npm` calls at runtime.
    - `HEALTHCHECK` calls `GET /healthz` (verifies the process **and** the SQLite query).
    - `docker-entrypoint.sh` runs `prisma migrate deploy` before starting the server. If it finds an existing database created with the old `db push` flow (Prisma `P3005`), it baselines `0_init` and deploys the rest.
 
@@ -40,6 +42,16 @@ In production the app also refuses to boot with secrets shorter than 32 characte
 
 ### Authentication level
 Add `AUTH_MODE=none|basic|full` to the env file to choose the authentication level (empty = `full`; see the README "Authentication Modes"). Compose forwards it. With `AUTH_MODE=none` the JWT secrets are unused but Compose still requires them: set any value or remove those two lines from your copy of `docker-compose.yml`. With `full` and real emails (`MAIL_TRANSPORT=smtp`), production also needs `SMTP_URL` and an https `APP_URL`.
+
+### Hardening already in `docker-compose.yml`
+`read_only: true` (+ tmpfs `/tmp`; the only writable path is the `sqlite_data` volume), `cap_drop: ALL`, `no-new-privileges`, `mem_limit`/`cpus`, and the port published on `127.0.0.1` only. Put a reverse proxy in front for external traffic.
+
+### Verify an image
+```bash
+docker build -t hono-api:ci .
+scripts/docker-smoke.sh hono-api:ci      # --read-only run, migrations, admin login, HEALTHCHECK
+```
+Scan it before releasing: `trivy image --ignore-unfixed --severity HIGH,CRITICAL hono-api:ci` (0 findings at the time of writing).
 
 ### Starting, inspecting, stopping
 ```bash
@@ -69,7 +81,7 @@ To restore, stop the API, copy the backup over `prod.db` in the volume, and star
 ---
 
 ## 4. Production Security Hardening Checklist
-- [ ] Container runs as non-root user (`node`).
+- [ ] Container runs as non-root user (`node`) with a read-only root filesystem and no capabilities (`docker-compose.yml` does this).
 - [ ] No secrets or `.env` files are baked into image layers (`.dockerignore` excludes `.env`).
 - [ ] Production secrets live in an untracked env file or the orchestrator's secret store, not in `docker-compose.yml`.
 - [ ] `HEALTHCHECK` is defined in the `Dockerfile` (pings `/healthz`).
