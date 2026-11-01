@@ -153,7 +153,7 @@ The API will be running on:
 http://localhost:3011
 ```
 
-*(Outside production, an empty database is seeded on first startup with demo accounts and tasks — see [Pre-seeded Demo Credentials](#pre-seeded-demo-credentials). With `AUTH_MODE=none` it seeds two public tasks instead. In production nothing is seeded; bootstrap the first admin with `ADMIN_EMAIL` / `ADMIN_PASSWORD`.)*
+*(With `SEED_DEMO=true` (the `.env.example` default for development), an empty database is seeded on first startup with demo accounts and tasks — see [Pre-seeded Demo Credentials](#pre-seeded-demo-credentials). With `AUTH_MODE=none` it seeds two public tasks instead. Without `SEED_DEMO`, or in production (where it is refused), nothing is seeded; bootstrap the first admin with `ADMIN_EMAIL` / `ADMIN_PASSWORD`.)*
 
 ### Database migrations
 
@@ -336,7 +336,7 @@ sequenceDiagram
 
 ### Pre-seeded Demo Credentials
 
-Created automatically **only when `NODE_ENV` is not `production`** and the database has no users. Never rely on them outside local development.
+Created automatically **only when `SEED_DEMO=true`** (never in production, where the flag is refused at startup) and the database has no users. Never rely on them outside local development. The `npm run test:e2e` suite needs them, so keep `SEED_DEMO=true` in your local `.env`.
 
 | Role | Name | Email | Password | Permissions |
 |---|---|---|---|---|
@@ -459,7 +459,7 @@ The tables describe the default `AUTH_MODE=full`. With `basic`, the recovery, ve
 ### Authentication (`/api/auth`)
 | Method | Endpoint | Description | Rate Limit |
 |---|---|---|---|
-| `POST` | `/api/auth/register` | Public sign-up (always `user` role) | 5 req/hour |
+| `POST` | `/api/auth/register` | Public sign-up (always `user` role). With `AUTH_MODE=full` and a delivering mailer it answers `202` with no account data whether or not the address is taken; the owner of a taken address is emailed instead. Otherwise `201`, or `409` for a taken address | 5 req/hour |
 | `POST` | `/api/auth/login` | Authenticate, create database session, issue tokens (account lockout after 5 failures) | 10 req/min |
 | `POST` | `/api/auth/refresh` | Renew token pair with **Token Rotation** (`409` on concurrent refresh) | 30 req/min |
 | `POST` | `/api/auth/logout` | Deactivate session and revoke refresh tokens | No |
@@ -497,7 +497,7 @@ The tables describe the default `AUTH_MODE=full`. With `basic`, the recovery, ve
 |---|---|---|---|
 | `GET` | `/api/users` | Paginated users list (`?page=1&limit=10&search=ana&role=user&include=tasks,sessions&includeDeleted=true&sort=-createdAt,name&filter[role]=user`) | Admin |
 | `GET` | `/api/users/:id` | Get user details (`?include=tasks,sessions`); Admin, or the user themselves | Bearer |
-| `POST` | `/api/users` | Create user with any role (public sign-up lives at `/api/auth/register`) | Admin |
+| `POST` | `/api/users` | Create user with any role (public sign-up lives at `/api/auth/register`). With `AUTH_MODE=full` and a delivering mailer, the new account gets its verification link | Admin |
 | `PUT` | `/api/users/:id` | Update own user profile (or any profile if Admin). Changing your own password or email needs `currentPassword`; a password change revokes other sessions | Bearer |
 | `DELETE` | `/api/users/:id/mfa` | *Admin only*: remove a user's 2FA (lost device) and revoke their sessions | Admin |
 | `PATCH` | `/api/users/:id/role` | **Promote / demote** *(Admin only)*: cannot change your own role or demote the last active admin | Admin |
@@ -587,11 +587,12 @@ All settings are environment variables, validated at startup (the process exits 
 |---|---|---|
 | `AUTH_MODE` | `full` | `none` (no users, public API), `basic` (users and sessions, no email/recovery/2FA) or `full`. See [Authentication Modes](#-authentication-modes-auth_mode) |
 | `JWT_SECRET` / `JWT_REFRESH_SECRET` | — (**required unless `AUTH_MODE=none`**) | HS256 signing secrets, at least 16 characters. **In production: at least 32 characters and different from each other.** Generate with `openssl rand -base64 48` |
-| `NODE_ENV` | `development` | `development`, `production` or `test`. Production disables the demo seeder and, by default, the docs |
+| `NODE_ENV` | `development` | `development`, `production` or `test`. Production disables the docs by default and refuses `SEED_DEMO` |
+| `SEED_DEMO` | `false` | Seeds the demo accounts and tasks into an empty database. Development only: the app refuses to start with it in production |
 | `PORT` | `3011` | HTTP port |
 | `DATABASE_URL` | `file:./dev.db` (`file:/app/data/prod.db` in the Docker image) | Local SQLite file (relative paths resolve from the working directory) |
 | `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` | — | Use a remote Turso/libSQL database instead of the local file |
-| `TRUST_PROXY` | `false` | Trust `X-Forwarded-For` for client IPs (enable only behind a trusted reverse proxy that appends to it, e.g. Traefik or Nginx) |
+| `TRUST_PROXY` | `false` | Trust `X-Forwarded-For` for client IPs (enable only behind a trusted reverse proxy that appends to it, e.g. Traefik or Nginx). **Behind any reverse proxy you must set it to `true`**: otherwise every user shares the proxy's IP and therefore one rate-limit budget. Production logs a warning when it is off |
 | `TRUST_PROXY_HOPS` | `1` | Number of trusted proxies in front of the API (`2` for e.g. Cloudflare + Traefik). Without a proxy header of that depth the socket address is used |
 | `CORS_ORIGINS` | `*` outside production, none in production | Comma-separated allowed origins. In production you must list your frontends (or set `*` explicitly) |
 | `ENABLE_DOCS` | `true` outside production | Expose `/docs` and `/openapi.json` |
