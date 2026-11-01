@@ -503,7 +503,7 @@ The tables describe the default `AUTH_MODE=full`. With `basic`, the recovery, ve
 | `PATCH` | `/api/users/:id/role` | **Promote / demote** *(Admin only)*: cannot change your own role or demote the last active admin | Admin |
 | `PATCH` | `/api/users/:id/block` | **Suspend / Reactivate User** *(Admin only)*: Immediately revokes all active sessions | Admin |
 | `POST` | `/api/users/:id/revoke-sessions` | Terminate all active sessions for a target user (self or Admin) | Bearer |
-| `DELETE` | `/api/users/:id` | Delete own account (or any if Admin). **Soft-delete** by default, `?permanent=true` for cascade | Bearer |
+| `DELETE` | `/api/users/:id` | Delete own account (or any if Admin). **Soft-delete** by default, `?permanent=true` for cascade. Deleting your own account needs `{ "currentPassword": "..." }` in the body (also for Admins) | Bearer |
 
 
 ### Audit & Security Logs (`/api/audit-logs`)

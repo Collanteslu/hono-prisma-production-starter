@@ -17,4 +17,5 @@ params:query {
 docs {
   Soft delete por defecto (revoca todas las sesiones); una cuenta eliminada no puede reactivarse.
   ?permanent=true borra físicamente en cascada. El último administrador activo no puede eliminarse.
+  Al borrar la propia cuenta, añade el cuerpo {"currentPassword": "..."} (también siendo admin); un admin que borra a otro no lo necesita.
 }

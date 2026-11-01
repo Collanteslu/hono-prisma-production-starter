@@ -10,7 +10,14 @@ import { env, features } from "../config/env.js";
 import { prisma } from "../db.js";
 import type { UserWhereInput } from "../generated/client/models.js";
 import { recordAudit } from "../lib/audit.js";
-import { createRouter, errorResponses, jsonBody, jsonResponse, secured } from "../lib/openapi.js";
+import {
+  allowEmptyJsonBody,
+  createRouter,
+  errorResponses,
+  jsonBody,
+  jsonResponse,
+  secured,
+} from "../lib/openapi.js";
 import { parseFilters, parseSorting } from "../lib/query.js";
 import { parseIncludes } from "../lib/relations.js";
 import { buildPagination, errorResponse, successResponse } from "../lib/response.js";
@@ -20,6 +27,7 @@ import {
   blockUserSchema,
   changeRoleSchema,
   createUserSchema,
+  deleteUserSchema,
   detailQuerySchema,
   idParamSchema,
   permanentQuerySchema,
@@ -196,16 +204,23 @@ const deleteRoute = createRoute({
   tags: ["Users"],
   summary: "Eliminar usuario (soft delete por defecto)",
   description:
-    "Soft delete revocando todas las sesiones, o borrado físico en cascada con `?permanent=true`. Solo Admin o el propio usuario. El último administrador activo no puede eliminarse.",
+    "Soft delete revocando todas las sesiones, o borrado físico en cascada con `?permanent=true`. Solo Admin o el propio usuario. Al borrar la propia cuenta hay que enviar `currentPassword` en el cuerpo (también siendo admin); un admin que borra a otro no lo necesita. El último administrador activo no puede eliminarse.",
   security: secured,
-  request: { params: idParamSchema, query: permanentQuerySchema },
+  middleware: [allowEmptyJsonBody] as const,
+  request: {
+    params: idParamSchema,
+    query: permanentQuerySchema,
+    body: { required: false, content: { "application/json": { schema: deleteUserSchema } } },
+  },
   responses: {
     200: jsonResponse(successSchema(userSchema), "Usuario eliminado"),
     ...errorResponses({
-      400: "Parámetros de consulta inválidos",
+      400: "Parámetros de consulta inválidos o cuerpo mal formado",
       ...adminErrors,
+      403: "Contraseña actual incorrecta o ausente (borrado de la propia cuenta)",
       404: "Usuario no encontrado",
       409: "No se puede eliminar al último administrador activo",
+      429: "Demasiadas confirmaciones de contraseña incorrectas",
     }),
   },
 });
@@ -599,6 +614,29 @@ export const userRoutes = router
 
     if (!existingUser || (existingUser.deletedAt && !isPermanent)) {
       return errorResponse(c, `User with ID '${id}' not found.`, 404);
+    }
+
+    // Deleting your own account re-confirms the password (same per-account lockout as PUT), so a
+    // stolen access token cannot erase the account. Admins deleting someone else are exempt.
+    if (currentUser.userId === id) {
+      const lockoutKey = passwordConfirmKey(id);
+      const retryAfter = await passwordConfirmLockout.retryAfterSeconds(lockoutKey);
+      if (retryAfter > 0) {
+        return errorResponse(
+          c,
+          `Too many incorrect password confirmations. Try again in ${retryAfter} seconds.`,
+          429,
+        );
+      }
+      const { currentPassword } = c.req.valid("json") ?? {};
+      const stored = await prisma.user.findUnique({ where: { id }, omit: { password: false } });
+      const valid =
+        !!currentPassword && !!stored && (await comparePassword(currentPassword, stored.password));
+      if (!valid) {
+        await passwordConfirmLockout.recordFailure(lockoutKey);
+        return errorResponse(c, "Current password is missing or incorrect.", 403);
+      }
+      await passwordConfirmLockout.reset(lockoutKey);
     }
 
     // The "last admin" check and the delete/soft-delete run in one transaction, so two concurrent

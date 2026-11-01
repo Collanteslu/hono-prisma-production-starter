@@ -197,6 +197,20 @@ export const createTaskSchema = z
   .openapi("CreateTaskRequest");
 
 /**
+ * Cuerpo opcional de `DELETE /api/users/:id`. Obligatorio solo cuando la cuenta borrada es la propia
+ * (también para un admin): sin la contraseña actual, un token robado bastaría para borrarla.
+ */
+export const deleteUserSchema = z
+  .object({
+    currentPassword: z.string().min(1).max(200).optional().openapi({
+      description:
+        "Contraseña actual. Obligatoria al borrar la propia cuenta; un admin que borra a otro usuario no la necesita.",
+      example: "password123",
+    }),
+  })
+  .openapi("DeleteUserRequest");
+
+/**
  * Esquema para actualizar una tarea existente.
  */
 export const updateTaskSchema = z
