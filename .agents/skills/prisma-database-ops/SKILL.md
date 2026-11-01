@@ -59,5 +59,5 @@ If you need to reset the local database from scratch:
 ```bash
 npx prisma migrate reset
 npx prisma generate
-# Restarting the app will trigger seedDatabase() automatically (outside production)
+# Restarting the app triggers seedDatabase() when SEED_DEMO=true (never in production)
 ```

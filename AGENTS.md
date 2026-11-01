@@ -22,10 +22,11 @@ npx prisma migrate deploy  # creates/updates dev.db
 npm run dev                # http://localhost:3011 (docs at /docs)
 ```
 
-With `SEED_DEMO=true` (set in `.env.example`, never allowed in production) an empty database is seeded
-with demo data (`admin@example.com` / `ana@example.com`, password `password123`; with `AUTH_MODE=none`,
-two public tasks). Without it nothing is seeded, so a deployment that forgets `NODE_ENV` gets no known admin. Environment variables are validated in
-`src/config/env.ts` and the process exits with a readable message when a combination is invalid.
+With `SEED_DEMO=true` (set in `.env.example`; the app refuses to start with it in production) an empty
+database is seeded with demo data (`admin@example.com` / `ana@example.com`, password `password123`; with
+`AUTH_MODE=none`, two public tasks). Without it nothing is seeded, so a deployment that forgets
+`NODE_ENV` gets no known admin. Environment variables are validated in `src/config/env.ts` and the
+process exits with a readable message when a combination is invalid.
 
 ## Checks (all must pass before opening a PR)
 
@@ -40,12 +41,13 @@ npm run test:coverage                # or `npm test`
 ```
 
 CI (`.github/workflows/ci.yml`) runs the same list. The image has its own check, `scripts/docker-smoke.sh`: it runs the image
-with `--read-only`, applies the migrations, signs in the seeded admin and waits for the `HEALTHCHECK`.
+with `--read-only`, applies the migrations, signs in the admin bootstrapped from `ADMIN_EMAIL` and waits for the
+`HEALTHCHECK`. CI runs it after building the image.
 Run the smoke test locally after touching the `Dockerfile` or the entrypoint: `docker build -t hono-api:ci . &&
 scripts/docker-smoke.sh hono-api:ci`. Tests create, migrate and
 delete their own temporary SQLite database (`tests/setup/global-setup.ts`), so `dev.db` is never touched.
 `npm run test:e2e` (`test-api.sh`) is an optional curl suite against a running dev server: it needs the
-demo accounts and `AUTH_MODE=full`.
+demo accounts (`SEED_DEMO=true`) and `AUTH_MODE=full`.
 
 ## Authentication modes (`AUTH_MODE`)
 
@@ -89,7 +91,7 @@ How it is wired, so new code follows the same pattern:
    and `meta` (the token endpoints keep their documented top-level shape).
 5. **Relations:** `parseIncludes(c.req.query("include"), allowedMap)` from `src/lib/relations.ts` with an
    explicit whitelist. `User.password` is omitted globally by the Prisma client (`src/db.ts`); only login
-   opts back in.
+   opts back in. Lists that embed relations (users with `tasks` and `sessions`) cap them, so responses stay bounded.
 6. **Filters and sorting:** `parseFilters(query, { allowedFields: { title: "string", completed: "boolean" } })`
    (typed records, invalid values → 400) and `parseSorting(sort, { allowedFields: [...] })` from
    `src/lib/query.ts`. Apply ownership conditions AFTER user filters. Exclude soft-deleted rows
@@ -98,6 +100,9 @@ How it is wired, so new code follows the same pattern:
    answers 404); admin routes use `middleware: [requireAdmin] as const` (the role is read from the database,
    not the JWT); client IPs only via `getClientIp(c)`; multi-step writes (block/delete + session
    revocation, token rotation, password/email change + token invalidation) inside `prisma.$transaction`.
+   Sensitive self-service actions (changing your own password or email, deleting your own account, enrolling
+   or disabling 2FA) re-confirm the password with `currentPassword` and use the shared password-confirmation
+   lockout (`passwordConfirmKey` / `passwordConfirmLockout`).
 8. **Audit:** mutating and security-relevant actions call `recordAudit(c, { … })` from `src/lib/audit.ts`.
 9. **API messages** (errors and validation) are in English.
 10. **Commits:** Conventional Commits (`feat:`, `fix:`, `docs:`, `chore:`, `test:`). Husky runs Biome on
@@ -122,8 +127,8 @@ Every new or changed endpoint needs a request in `bruno/<Module>/` (see
 [`.agents/skills/bruno-testing`](.agents/skills/bruno-testing/SKILL.md)). Tokens are runtime variables set
 by the `Login *` post-response scripts and are never written to disk; `environments/Local.bru` only holds
 `baseUrl`. `tests/account-security-docs.test.ts` fails if a documented `/api/auth/*` endpoint has no
-request in `bruno/Auth/` — that parity check covers the Auth module only, so keep the other modules'
-requests in sync by hand.
+request in `bruno/Auth/`. The rest of the collection is not checked by a test: keep it in sync by hand.
+Today it covers every route in `/openapi.json`, including `GET /healthz` (`bruno/System/`).
 
 ## Safety rules
 

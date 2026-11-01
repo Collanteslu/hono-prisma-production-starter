@@ -9,3 +9,13 @@ get {
   body: none
   auth: none
 }
+
+params:query {
+  page: 1
+  limit: 50
+}
+
+docs {
+  Sesiones del usuario actual, incluidas las revocadas o caducadas que la limpieza aún no ha purgado.
+  Paginado con page y limit (máximo 100). count es el total de sesiones, no solo la página.
+}

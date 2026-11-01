@@ -1,0 +1,16 @@
+meta {
+  name: Healthcheck
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/healthz
+  body: none
+  auth: none
+}
+
+docs {
+  Estado del proceso y latencia de la consulta a la base de datos. Sin autenticación.
+  Responde 200 con database.status "connected", o 503 si la base de datos no responde.
+}
