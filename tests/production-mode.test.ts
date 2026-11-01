@@ -4,7 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 type App = typeof import("../src/app.js")["default"];
 
 async function loadApp(env: Record<string, string>, infoSink: string[] = []): Promise<App> {
-  for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value);
+  // Demo seeding is refused in production, so the suite's SEED_DEMO=true must be cleared here
+  for (const [key, value] of Object.entries({ SEED_DEMO: "", ...env })) vi.stubEnv(key, value);
   vi.resetModules();
   // Capture what the access logger writes (the test logger is silent otherwise)
   vi.doMock("../src/lib/logger.js", () => {

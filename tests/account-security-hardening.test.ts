@@ -32,7 +32,8 @@ describe("APP_URL in production with SMTP", () => {
   /** Loads src/config/env.ts with extra variables; returns the startup error text, if any */
   async function loadEnv(vars: Record<string, string>) {
     vi.resetModules();
-    for (const [key, value] of Object.entries(vars)) vi.stubEnv(key, value);
+    // Demo seeding is refused in production, so the suite's SEED_DEMO=true must be cleared here
+    for (const [key, value] of Object.entries({ SEED_DEMO: "", ...vars })) vi.stubEnv(key, value);
     const exit = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
       throw new Error(`process.exit(${code})`);
     }) as never);
@@ -55,6 +56,15 @@ describe("APP_URL in production with SMTP", () => {
     MAIL_TRANSPORT: "smtp",
     SMTP_URL: "smtp://localhost:2525",
   };
+
+  it("refuses demo seeding in production", async () => {
+    const { error } = await loadEnv({
+      NODE_ENV: "production",
+      MAIL_TRANSPORT: "none",
+      SEED_DEMO: "true",
+    });
+    expect(error).toContain("SEED_DEMO");
+  });
 
   it("refuses to start without APP_URL", async () => {
     const { error } = await loadEnv({ ...productionSmtp, APP_URL: "" });

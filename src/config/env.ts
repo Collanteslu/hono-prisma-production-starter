@@ -97,6 +97,12 @@ const envSchema = z
     LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).optional(),
     // Seconds during which reusing a just-rotated refresh token is treated as a concurrent refresh
     REFRESH_REUSE_GRACE_SECONDS: z.coerce.number().int().min(0).default(10),
+    // Demo accounts and tasks (admin@example.com / password123) are seeded only when this is
+    // explicitly enabled, so a deployment that forgets NODE_ENV does not get a known admin login.
+    SEED_DEMO: z
+      .string()
+      .optional()
+      .transform((val) => val === "true" || val === "1"),
   })
   .superRefine((cfg, ctx) => {
     const authEnabled = cfg.AUTH_MODE !== "none";
@@ -158,6 +164,13 @@ const envSchema = z
     }
     if (cfg.NODE_ENV !== "production") return;
     // Production hardening below
+    if (cfg.SEED_DEMO) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["SEED_DEMO"],
+        message: "SEED_DEMO=true seeds known demo credentials and must not be used in production",
+      });
+    }
     if (cfg.MAIL_TRANSPORT === "memory") {
       ctx.addIssue({
         code: "custom",

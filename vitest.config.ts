@@ -22,6 +22,7 @@ export default defineConfig({
       JWT_REFRESH_SECRET: "test_jwt_refresh_secret_key_at_least_32_characters",
       TRUST_PROXY: "false",
       LOG_LEVEL: "silent",
+      SEED_DEMO: "true",
       MAIL_TRANSPORT: "memory",
       RECOVERY_RATE_LIMIT_MAX: "1000",
       MFA_RATE_LIMIT_MAX: "1000",
