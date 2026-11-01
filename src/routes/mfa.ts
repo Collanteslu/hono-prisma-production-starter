@@ -231,10 +231,14 @@ export const mfaRoutes = router
       await passwordConfirmLockout.recordFailure(lockoutKey);
       return errorResponse(c, "Current password or code is incorrect.", 403);
     }
-    await passwordConfirmLockout.reset(lockoutKey);
+    // A wrong code counts towards the same lockout as a wrong password, and only a fully valid
+    // confirmation clears the counter (clearing it before the code check would let a correct
+    // password reset the count on every attempt)
     if (!(await verifySecondFactor(user, { code, recoveryCode }))) {
+      await passwordConfirmLockout.recordFailure(lockoutKey);
       return errorResponse(c, "Current password or code is incorrect.", 403);
     }
+    await passwordConfirmLockout.reset(lockoutKey);
 
     await prisma.$transaction([
       prisma.user.update({

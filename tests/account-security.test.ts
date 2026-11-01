@@ -115,6 +115,31 @@ describe("Password recovery", () => {
     expect(again.status).toBe(400);
   });
 
+  it("the reset also lifts the password-confirmation lockout", async () => {
+    const user = await createTestUser();
+    const before = outbox.length;
+    const changePassword = (token: string, currentPassword: string) =>
+      app.request(`/api/users/${user.user.id}`, {
+        method: "PUT",
+        headers: bearer(token),
+        body: JSON.stringify({ password: "another-pass-33", currentPassword }),
+      });
+
+    // Five wrong confirmations lock password changes for this account
+    for (let i = 0; i < 5; i++)
+      expect((await changePassword(user.accessToken, "wrong-pass-1")).status).toBe(403);
+    expect((await changePassword(user.accessToken, user.password)).status).toBe(429);
+
+    await post("/api/auth/forgot-password", { email: user.email });
+    const token = await tokenEmailedTo(user.email, before);
+    expect(
+      (await post("/api/auth/reset-password", { token, password: "brand-new-pass-1" })).status,
+    ).toBe(200);
+
+    const fresh = await login(user.email, "brand-new-pass-1");
+    expect((await changePassword(fresh.accessToken, "brand-new-pass-1")).status).toBe(200);
+  });
+
   it("rejects garbage, expired and wrong-type tokens", async () => {
     const user = await createTestUser();
     const before = outbox.length;
@@ -333,6 +358,21 @@ describe("Two-factor authentication", () => {
       expect((await loginWith(user.email, { totpCode: "123456" })).status).toBe(401);
     }
     expect((await loginWith(user.email, { totpCode: "123456" })).status).toBe(429);
+  });
+
+  it("wrong codes when disabling count towards the lockout, even with the right password", async () => {
+    const { user, recoveryCodes } = await enroll();
+    const session = await login(user.email, user.password, { recoveryCode: recoveryCodes[1] });
+    const disable = (factor: Record<string, string>) =>
+      post(
+        "/api/auth/mfa/disable",
+        { currentPassword: user.password, ...factor },
+        session.accessToken,
+      );
+
+    for (let i = 0; i < 5; i++) expect((await disable({ code: "123456" })).status).toBe(403);
+    // Locked: even the valid recovery code is refused until the lockout window passes
+    expect((await disable({ recoveryCode: recoveryCodes[2] })).status).toBe(429);
   });
 
   it("is never exposed through the users API", async () => {
