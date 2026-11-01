@@ -622,3 +622,38 @@ describe("Emailed tokens after an email or password change", () => {
     ).toBe(400);
   });
 });
+
+describe("Registration does not reveal which addresses have accounts", () => {
+  it("answers the same 202 for a new and a taken address, and mails the owner of the taken one", async () => {
+    const owner = await createTestUser();
+    const before = outbox.length;
+
+    const taken = await post("/api/auth/register", {
+      name: "Someone Else",
+      email: owner.email,
+      password: "another-pass-44",
+    });
+    const fresh = await post("/api/auth/register", {
+      name: "New Person",
+      email: `fresh-${randomUUID()}@example.com`,
+      password: "another-pass-44",
+    });
+
+    expect(taken.status).toBe(202);
+    expect(fresh.status).toBe(202);
+    expect(await taken.json()).toMatchObject({ success: true, data: null });
+    expect(await fresh.json()).toMatchObject({ success: true, data: null });
+
+    // The owner learns about the attempt; the password of the existing account is untouched
+    await vi.waitFor(() => {
+      if (
+        !outbox
+          .slice(before)
+          .some((m) => m.to === owner.email && m.subject.includes("Someone tried"))
+      )
+        throw new Error("no notice yet");
+    });
+    expect(await prisma.user.count({ where: { email: owner.email } })).toBe(1);
+    await expect(login(owner.email, owner.password)).resolves.toBeDefined();
+  });
+});

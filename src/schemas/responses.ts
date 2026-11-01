@@ -157,9 +157,13 @@ export const refreshResponseSchema = z
 export const sessionListResponseSchema = z
   .object({
     success: z.literal(true),
-    count: z.number().int(),
+    count: z
+      .number()
+      .int()
+      .openapi({ description: "Total de sesiones del usuario (no solo la página)" }),
     currentSessionId: z.string(),
     data: z.array(sessionSchema.extend({ isCurrent: z.boolean() })),
+    pagination: paginationSchema,
     meta: metaSchema,
   })
   .openapi("SessionListResponse");

@@ -50,10 +50,11 @@ const authErrors = { 401: "Token ausente, inválido o sesión revocada" } as con
 const adminErrors = { ...authErrors, 403: "Requiere rol administrador" } as const;
 
 // Soft-deleted tasks are left out of `?include=tasks` on purpose: the task list hides them the same
-// way unless the caller explicitly asks for them (AGENTS.md rule 6). The relation stays unbounded.
+// way unless the caller explicitly asks for them (AGENTS.md rule 6). Both relations are capped at
+// the 50 most recent rows so a user with a long history cannot inflate a single response.
 const USER_INCLUDES = {
-  tasks: { where: { deletedAt: null } },
-  sessions: true,
+  tasks: { where: { deletedAt: null }, orderBy: { createdAt: "desc" }, take: 50 },
+  sessions: { orderBy: { createdAt: "desc" }, take: 50 },
 } as const;
 
 /**
@@ -328,6 +329,11 @@ export const userRoutes = router
     const newUser = await prisma.user.create({
       data: { name, email, password: await hashPassword(password), role },
     });
+
+    // The account has to verify its address when email verification is on, so it gets the link
+    if (features.accountSecurity && env.MAIL_TRANSPORT !== "none") {
+      inBackground(() => sendVerificationEmail(newUser));
+    }
 
     await recordAudit(c, {
       userId: c.get("user").userId,

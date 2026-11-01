@@ -269,6 +269,12 @@ export const idParamSchema = z.object({
   id: z.string().openapi({ param: { name: "id", in: "path" }, example: "user-1" }),
 });
 
+/** Query de `GET /sessions/me`: paginación de las sesiones del propio usuario */
+export const sessionListQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+});
+
 /** Parámetro de ruta `:sessionId` */
 export const sessionIdParamSchema = z.object({
   sessionId: z.string().openapi({ param: { name: "sessionId", in: "path" } }),

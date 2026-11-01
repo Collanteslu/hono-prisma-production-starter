@@ -51,6 +51,21 @@ export async function sendEmailChangedNotice(recipient: {
   });
 }
 
+/**
+ * Sent to an address that already has an account when someone tries to register it again. The
+ * registration response is the same either way, so this is how the owner finds out.
+ */
+export async function sendAlreadyRegisteredNotice(recipient: {
+  name: string;
+  email: string;
+}): Promise<void> {
+  await sendMail({
+    to: recipient.email,
+    subject: "Someone tried to create an account with your email",
+    text: `Hi ${recipient.name},\n\nSomeone tried to sign up with this email address, but an account already exists for it. If that was you, sign in or use "forgot password". If it was not you, ignore this message: nothing has changed.`,
+  });
+}
+
 export async function sendPasswordResetEmail(user: Recipient): Promise<void> {
   const token = await createAuthToken(
     user,

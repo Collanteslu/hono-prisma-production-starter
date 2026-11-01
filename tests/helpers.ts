@@ -38,7 +38,10 @@ export async function createTestUser(password = "password123") {
     headers: jsonHeaders,
     body: JSON.stringify({ name: "Test User", email, password }),
   });
-  if (res.status !== 201) throw new Error(`Register failed: ${res.status} ${await res.text()}`);
+  // 201 without email verification, 202 (the same answer for every address) with it
+  if (res.status !== 201 && res.status !== 202) {
+    throw new Error(`Register failed: ${res.status} ${await res.text()}`);
+  }
   const session = await login(email, password);
   return { email, password, ...session };
 }

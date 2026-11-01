@@ -64,11 +64,11 @@ describe("Registration and user creation", () => {
         role: "admin",
       }),
     });
-    expect(res.status).toBe(201);
-    const data = await res.json();
-    expect(data.data.role).toBe("user");
-    expect(data.data.email).toMatch(/^mallory-\d+@example\.com$/);
-    expect(data.data.password).toBeUndefined();
+    // Full mode with a live mailer: the answer is the same 202 whether the address is new or not
+    expect(res.status).toBe(202);
+    const created = await prisma.user.findFirst({ where: { name: "Mallory" } });
+    expect(created?.role).toBe("user");
+    expect(created?.email).toMatch(/^mallory-\d+@example\.com$/);
   });
 
   it("enforces the password policy (min 8 chars)", async () => {

@@ -75,8 +75,9 @@ describe("Responses satisfy the documented schemas", () => {
       headers: jsonHeaders,
       body: JSON.stringify({ name: "Contract", email, password: "password123" }),
     });
-    expect(register.status).toBe(201);
-    expectMatches(successSchema(userSchema), await register.json());
+    // Full mode with a live mailer: 202 with no account data (the same for every address)
+    expect(register.status).toBe(202);
+    expectMatches(successSchema(z.null()), await register.json());
 
     const login = await app.request("/api/auth/login", {
       method: "POST",
