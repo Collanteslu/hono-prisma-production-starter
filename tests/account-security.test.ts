@@ -268,9 +268,11 @@ describe("Two-factor authentication", () => {
     );
     const { secret } = (await setup.json()).data as { secret: string; otpauthUrl: string };
     // Use the next time step so the login codes below still fall after it
-    const enable = await post("/api/auth/mfa/enable", { code: totpCode(secret) }, user.accessToken);
+    // Keep the exact code used to confirm: re-deriving it later could fall into the next 30 s window
+    const enableCode = totpCode(secret);
+    const enable = await post("/api/auth/mfa/enable", { code: enableCode }, user.accessToken);
     const { recoveryCodes } = (await enable.json()).data as { recoveryCodes: string[] };
-    return { user, secret, recoveryCodes, enableStatus: enable.status };
+    return { user, secret, enableCode, recoveryCodes, enableStatus: enable.status };
   }
 
   const loginWith = (email: string, extra: Record<string, string> = {}) =>
@@ -328,7 +330,7 @@ describe("Two-factor authentication", () => {
   });
 
   it("login needs the second factor, rejects replays and bad codes, accepts recovery codes once", async () => {
-    const { user, secret, recoveryCodes, enableStatus } = await enroll();
+    const { user, secret, enableCode, recoveryCodes, enableStatus } = await enroll();
     expect(enableStatus).toBe(200);
 
     const missing = await loginWith(user.email);
@@ -336,7 +338,7 @@ describe("Two-factor authentication", () => {
     expect((await missing.json()).details).toEqual({ code: "MFA_REQUIRED" });
 
     // The enable step already consumed the current time step: the same code is a replay
-    const replay = await loginWith(user.email, { totpCode: totpCode(secret) });
+    const replay = await loginWith(user.email, { totpCode: enableCode });
     expect(replay.status).toBe(401);
     expect((await replay.json()).details).toEqual({ code: "MFA_INVALID" });
 
