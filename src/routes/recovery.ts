@@ -12,7 +12,11 @@ import { recordAudit } from "../lib/audit.js";
 import { createRouter, errorResponses, jsonBody, jsonResponse } from "../lib/openapi.js";
 import { clearBucket, hitBucket } from "../lib/rateLimitStore.js";
 import { errorResponse, successResponse } from "../lib/response.js";
-import { passwordConfirmKey, rateLimiter } from "../middleware/rateLimit.js";
+import {
+  passwordConfirmKey,
+  passwordConfirmLockout,
+  rateLimiter,
+} from "../middleware/rateLimit.js";
 import {
   forgotPasswordSchema,
   resendVerificationSchema,
@@ -165,7 +169,7 @@ export const recoveryRoutes = router
     // Unlock the account for the new password: both the login lockout and the password-confirmation
     // lockout (PUT /api/users/:id, /mfa/setup, /mfa/disable) key on this same account
     await clearBucket(`lockout:${user.email}`);
-    await clearBucket(passwordConfirmKey(user.id));
+    await passwordConfirmLockout.reset(passwordConfirmKey(user.id));
 
     await recordAudit(c, {
       userId: user.id,

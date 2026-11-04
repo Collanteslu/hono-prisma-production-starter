@@ -16,5 +16,5 @@ The complete guide for agents is [`AGENTS.md`](../AGENTS.md) at the repository r
 - **Audit Logs**: Mutating and security-relevant actions must call `recordAudit` in `src/lib/audit.ts`.
 - **Auth modes**: `AUTH_MODE=none|basic|full` (default `full`). Gate optional modules with `features` from `src/config/env.ts` and mount them with `whenEnabled(...)`; the Prisma schema is the same in every mode.
 - **Database**: Schema changes need a migration (`npm run db:migrate -- --name x`) and `npm run db:generate`; never `prisma db push`.
-- **Checks**: `npm run typecheck`, `npm run lint` and `npm test` must pass (CI also checks migration drift, build and `npm audit` for production dependencies; see AGENTS.md).
+- **Checks**: `npm run typecheck`, `npm run lint` and `npm test` must pass (CI also checks migration drift, build and `npm audit` for all dependencies, dev tooling included; see AGENTS.md).
 - **Bruno & secrets**: new or changed endpoints get a request in `bruno/`; never commit secrets, `.env` files or tokens.

@@ -77,12 +77,13 @@ export async function applySqlitePragmas(): Promise<void> {
 /**
  * Database seeder executed during application startup.
  * Seeds initial demo accounts and tasks with hashed passwords if the database is empty.
- * Security: Disabled in production to prevent hardcoded demo credentials.
+ * Only runs with SEED_DEMO=true (never in production). Production may still bootstrap its first
+ * admin from ADMIN_EMAIL / ADMIN_PASSWORD, which needs no demo data.
  */
 export async function seedDatabase() {
   // AUTH_MODE=none has no users: outside production, seed a couple of public example tasks
   if (!features.auth) {
-    if (env.NODE_ENV === "production") return;
+    if (env.NODE_ENV === "production" || !env.SEED_DEMO) return;
     if ((await prisma.task.count({ where: { userId: null } })) === 0) {
       await prisma.task.createMany({
         data: [
@@ -123,6 +124,8 @@ export async function seedDatabase() {
     }
     return;
   }
+
+  if (!env.SEED_DEMO) return;
 
   if (usersCount === 0) {
     logger.info("🌱 Initializing database with default seeded accounts and tasks...");

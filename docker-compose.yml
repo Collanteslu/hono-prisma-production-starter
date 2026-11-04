@@ -7,9 +7,11 @@ services:
     restart: unless-stopped
     ports:
       # Publicado SOLO en localhost: el contenedor nunca escucha en todas las interfaces del
-      # host. Detrás de un proxy en el mismo host esto basta (el proxy es el único cliente).
-      # Para exponerlo a una red interna, conecta el servicio a la red del proxy en lugar de
-      # publicar el puerto, y termina TLS en el proxy, no en el contenedor.
+      # host. Con un proxy en el mismo host, el proxy es el único cliente que ve la API: para que
+      # los límites de tasa y la auditoría vean la IP real del usuario, define TRUST_PROXY=true
+      # (y TRUST_PROXY_HOPS con el número de proxies). Sin ello, todos los usuarios comparten un
+      # único cupo. Para exponerlo a una red interna, conecta el servicio a la red del proxy en
+      # lugar de publicar el puerto, y termina TLS en el proxy, no en el contenedor.
       - "127.0.0.1:3011:3011"
     # Endurecimiento del contenedor: sistema de ficheros de solo lectura (la única ruta
     # escribible es el volumen de datos y /tmp), sin privilegios ni capabilities, con límites

@@ -8,10 +8,13 @@
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { prisma } from "../db.js";
 import { logger } from "./logger.js";
 
-const MIGRATIONS_DIR = path.resolve(process.cwd(), "prisma", "migrations");
+// Relative to this module (src/lib or dist/lib, both two levels below the project root), so the
+// check cannot silently skip when the process starts from another working directory
+const MIGRATIONS_DIR = fileURLToPath(new URL("../../prisma/migrations", import.meta.url));
 
 type MigrationRow = {
   migration_name: string;

@@ -29,7 +29,7 @@ describe("REQUIRE_EMAIL_VERIFICATION=true", () => {
       email,
       password: "password123",
     });
-    expect(reg.status).toBe(201);
+    expect(reg.status).toBe(202);
 
     const blocked = await post("/api/auth/login", { email, password: "password123" });
     expect(blocked.status).toBe(403);

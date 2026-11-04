@@ -33,8 +33,8 @@ jobs:
       - name: 🛠️ Generar Prisma Client
         run: npx prisma generate
 
-      - name: 🛡️ Auditoría de dependencias de producción
-        run: npm audit --omit=dev --audit-level=high
+      - name: 🛡️ Auditoría de dependencias (producción y desarrollo)
+        run: npm audit --audit-level=high
 
       - name: 🗄️ Verificar que las migraciones coinciden con el schema
         run: npx prisma migrate diff --from-migrations prisma/migrations --to-schema prisma/schema.prisma --exit-code
@@ -50,6 +50,9 @@ jobs:
 
       - name: 🐳 Construir la imagen Docker
         run: docker build -t hono-api:ci .
+
+      - name: 🐳 Smoke test de la imagen (read-only, migraciones, login, HEALTHCHECK)
+        run: scripts/docker-smoke.sh hono-api:ci
 
       # Los tests crean y migran su propia base de datos SQLite temporal (ver vitest.config.ts)
       - name: 🧪 Ejecutar Tests Automatizados con cobertura (Vitest)

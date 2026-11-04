@@ -75,10 +75,11 @@ hono-prisma-production-starter/
 │   ├── Sessions/                     # My Sessions, Revoke Session, Revoke All Sessions
 │   ├── Users/                        # List/Get/Create/Update/Delete, Block/Unblock, Revoke User Sessions, Reset User MFA
 │   ├── Tasks/                        # List/Get/Create/Update/Delete, Restore Task
-│   └── Audit/                        # List Audit Logs
+│   ├── Audit/                        # List Audit Logs
+│   └── System/                       # Healthcheck (GET /healthz)
 ├── src/
 │   ├── config/env.ts                 # Zod-validated environment variables (fails fast on bad config), AUTH_MODE `features`
-│   ├── db.ts                         # Prisma 7 client (password hashes omitted globally) & dev seeder
+│   ├── db.ts                         # Prisma 7 client (password hashes omitted globally) & demo seeder (SEED_DEMO)
 │   ├── app.ts                        # The Hono app: global middleware, OpenAPI docs, routes, error handling (no side effects)
 │   ├── index.ts                      # Entrypoint: startup checks, seed, cleanup job, HTTP listener, graceful shutdown
 │   ├── jobs/cleanup.ts               # Background purge of expired sessions, rotated/emailed tokens, used recovery codes, old audit logs
@@ -87,8 +88,10 @@ hono-prisma-production-starter/
 │   │   ├── clientIp.ts               # Client IP resolution (proxy headers only if TRUST_PROXY=true)
 │   │   ├── logger.ts                 # Pino logger
 │   │   ├── mailer.ts                 # Mail transports: none, log, smtp (nodemailer, loaded lazily), memory (tests)
+│   │   ├── migrations.ts             # Startup guard: migration history vs prisma/migrations
 │   │   ├── openapi.ts                # createRouter(), route helpers (jsonBody, jsonResponse, errorResponses), whenEnabled()
 │   │   ├── query.ts                  # Typed filter[...] and sort parsing
+│   │   ├── rateLimitStore.ts         # Fixed-window counters in the database (rate limits and lockouts)
 │   │   ├── relations.ts              # ?include= whitelist parser
 │   │   ├── response.ts               # successResponse / errorResponse / pagination helpers
 │   │   ├── totp.ts                   # RFC 6238 TOTP, secret encryption, recovery codes
@@ -153,7 +156,7 @@ The API will be running on:
 http://localhost:3011
 ```
 
-*(Outside production, an empty database is seeded on first startup with demo accounts and tasks — see [Pre-seeded Demo Credentials](#pre-seeded-demo-credentials). With `AUTH_MODE=none` it seeds two public tasks instead. In production nothing is seeded; bootstrap the first admin with `ADMIN_EMAIL` / `ADMIN_PASSWORD`.)*
+*(With `SEED_DEMO=true` (the `.env.example` default for development), an empty database is seeded on first startup with demo accounts and tasks — see [Pre-seeded Demo Credentials](#pre-seeded-demo-credentials). With `AUTH_MODE=none` it seeds two public tasks instead. Without `SEED_DEMO`, or in production (where it is refused), nothing is seeded; bootstrap the first admin with `ADMIN_EMAIL` / `ADMIN_PASSWORD`.)*
 
 ### Database migrations
 
@@ -192,7 +195,8 @@ What it means in practice:
 
 - **Routes that are not mounted answer `404`** and are absent from `/openapi.json`, `/docs` (tags included) and the `GET /` index, which also reports the active `authMode`. In `none` mode the `BearerAuth` security scheme and the `401` responses disappear from the spec too.
 - **The database schema is identical in every mode.** All tables exist, migrations are the same, and switching modes never needs a migration. `Task.userId` is optional for that reason: with `none` new tasks are created without an owner, and tasks that belong to a user (e.g. created earlier in `basic`/`full`) are never shown by the public API.
-- **`none`**: every task route is public; `?userId=` and `?scope=all` return `400` and `?include=user` is ignored. Task changes are still written to the `AuditLog` table (without a user), but there is no endpoint to read it. Outside production two example tasks are seeded instead of the demo accounts. `ADMIN_EMAIL` / `ADMIN_PASSWORD` are rejected at startup because there are no users.
+- **`none`**: every task route is public; `?userId=` and `?scope=all` return `400` and `?include=user` is ignored. Task changes are still written to the `AuditLog` table (without a user), but there is no endpoint to read it. With `SEED_DEMO=true` two example tasks are seeded instead of the demo accounts. `ADMIN_EMAIL` / `ADMIN_PASSWORD` are rejected at startup because there are no users.
+- **`full`**: registration answers `202` with no account data whether or not the address is taken, once a mailer that delivers is configured (`MAIL_TRANSPORT=smtp` or `memory`). In `basic`, `none` or with `MAIL_TRANSPORT=log/none` it answers `201`, or `409` for a taken address, because nobody could receive the answer by email.
 - **`basic`**: registration and email changes send no verification email and `REQUIRE_EMAIL_VERIFICATION=true` is rejected at startup. Accounts that enabled 2FA while running `full` **still need their second factor at login** (downgrading the mode never silently removes a protection); their TOTP codes and recovery codes keep working, but disabling or resetting 2FA requires switching back to `full`.
 - **Invalid combinations fail fast** (Zod `superRefine` in `src/config/env.ts`): missing JWT secrets in `basic`/`full`, `ADMIN_*` with `none`, `REQUIRE_EMAIL_VERIFICATION` outside `full`. The https `APP_URL` requirement for SMTP in production only applies to `full`.
 - **Typed client**: `AppType` always describes the `full` build (TypeScript types cannot depend on a runtime variable). Calling a route of a disabled module through `hc<AppType>` compiles but returns `404`.
@@ -223,7 +227,7 @@ AUTH_MODE=basic npm run dev   # accounts and sessions, no email/2FA
    | `ADMIN_EMAIL`, `ADMIN_PASSWORD` (first admin in production) | not allowed | ✅ | ✅ |
    | `MAIL_TRANSPORT=smtp`, `SMTP_URL`, `MAIL_FROM`, `APP_URL` (https) | — | — | ✅ for real emails |
    | `MFA_ISSUER` (your product name in authenticator apps), `MFA_ENCRYPTION_KEY` | — | — | ✅ |
-   | `TRUST_PROXY` / `TRUST_PROXY_HOPS`, `TURSO_*`, `ENABLE_DOCS` | as needed | as needed | as needed |
+   | `TRUST_PROXY=true` / `TRUST_PROXY_HOPS` (**required behind a reverse proxy**), `TURSO_*`, `ENABLE_DOCS` | as needed | as needed | as needed |
 
 4. **Replace the example resource**: `Task` (model, `src/routes/tasks.ts`, its schemas, `bruno/Tasks/`, `tests/tasks.test.ts`) is there to show the conventions — ownership, soft delete, filters, includes, audit. Copy its shape for your own models (see [`.agents/skills/api-endpoint-creator`](.agents/skills/api-endpoint-creator/SKILL.md)), then delete it.
 5. **Reset the migration history** if you changed the models before your first deployment: delete `prisma/migrations/*` (keep `migration_lock.toml`) and run `npm run db:migrate -- --name init && npm run db:generate`. Once something is deployed, only add new migrations.
@@ -284,7 +288,7 @@ Some things to know before running requests:
 | `Auth/*` (except login/register/refresh/logout), `Users/Reset User MFA` | Only exist with `AUTH_MODE=full` (404 otherwise) |
 | `Tasks/*` with `AUTH_MODE=none` | No login needed; use an `id` returned by `List Tasks` (the demo `task-*` ids are not seeded) |
 
-Demo accounts only exist outside production (see [Pre-seeded Demo Credentials](#pre-seeded-demo-credentials)). You can also run the collection headless: `npx @usebruno/cli run --env Local` from the `bruno/` folder (note that `Auth/Logout` invalidates the token used by the requests that follow it, so run folders individually).
+Demo accounts exist only with `SEED_DEMO=true`, never in production (see [Pre-seeded Demo Credentials](#pre-seeded-demo-credentials)). You can also run the collection headless: `npx @usebruno/cli run --env Local` from the `bruno/` folder (note that `Auth/Logout` invalidates the token used by the requests that follow it, so run folders individually).
 
 ---
 
@@ -323,20 +327,21 @@ sequenceDiagram
 - **Real-time authorization**: blocking, soft-deleting, role changes and session revocation take effect on the very next request (role is read from the database, not from the JWT).
 - **Brute-force protection**: per-IP rate limits on `/login`, `/refresh` and `/register`, plus a per-account lockout after 5 failed logins (15 min). Counters are stored in the database (`RateLimitBucket`), so limits hold across every instance sharing it (e.g. Turso) and survive restarts; a broken counter store fails open and is logged. The lockout is keyed by email, so someone can deliberately lock a known address (`LOGIN_LOCKOUT_MAX_FAILURES` / `LOGIN_LOCKOUT_MINUTES` tune it); this is the usual trade-off against credential stuffing.
 - **Trusted client IP**: `X-Forwarded-For` is only honoured when `TRUST_PROXY=true`, and it is read **from the right** (`TRUST_PROXY_HOPS` trusted proxies, default 1) because the leftmost entries are client-controlled. `CF-Connecting-IP` and `X-Real-IP` are ignored, since clients can set them and many proxies forward them untouched. Used for sessions, the audit log and rate limiting.
-- **Password policy**: 8–72 characters and at most 72 UTF-8 bytes (bcrypt cost 12). Changing your own password requires `currentPassword`; the update and the revocation of every other session run in one transaction. Admins can reset another user's password without it.
+- **Password policy**: 8–72 characters and at most 72 UTF-8 bytes (bcrypt cost 12). Changing your own password requires `currentPassword`; the update and the revocation of every other session run in one transaction. Admins can reset another user's password without it. Deleting your own account also requires `currentPassword`, admins included.
 - **Absolute sessions**: a session lasts 7 days from login; rotated refresh tokens are capped to that expiry, so users must log in again after day 7.
 - **Startup guards**: the app refuses to boot without `JWT_SECRET` / `JWT_REFRESH_SECRET` (unless `AUTH_MODE=none`, where nothing is signed), and in production requires both to be at least 32 characters and different from each other. Inconsistent settings (see [Authentication Modes](#-authentication-modes-auth_mode)) also stop the boot. `.env.example` ships with blank secrets on purpose.
 - **Admin safety**: the last active administrator cannot delete their account; deleted accounts cannot be reactivated.
 - **Password recovery** *(`AUTH_MODE=full`)*: `POST /api/auth/forgot-password` always answers 202 (exists or not) and sends the email in the background, so neither the body nor the latency reveals which addresses are registered; at most 3 emails per address per hour. The emailed token is single-use, stored only as SHA-256 and expires after `PASSWORD_RESET_TTL_MINUTES`. Resetting revokes every session, lifts the login lockout and keeps 2FA enforced.
 - **Email verification** *(`AUTH_MODE=full`)*: registration (and any email change) sends a single-use link. Set `REQUIRE_EMAIL_VERIFICATION=true` to forbid login until it is used (needs `MAIL_TRANSPORT=smtp`). Existing accounts are grandfathered as verified by the migration. Changing your own email or password needs `currentPassword`, so a stolen access token cannot redirect password resets to an attacker's mailbox. Emailed links are bound to the address they were sent to, and changing the email or the password (including via reset) deletes every pending link, so a link sent to a previous address never works.
 - **Two-factor authentication (TOTP, RFC 6238)** *(`AUTH_MODE=full`; enrolled accounts keep needing their code in `basic`)*: `POST /api/auth/mfa/setup` (needs the password) → scan the `otpauth://` URI → `POST /api/auth/mfa/enable` returns 10 one-time recovery codes and signs out other devices. Login then needs `totpCode` or `recoveryCode`. Codes cannot be replayed (the accepted time step is stored atomically), wrong codes count towards the lockout, secrets are AES-256-GCM encrypted at rest (`MFA_ENCRYPTION_KEY`, defaults to a key derived from `JWT_SECRET`) and recovery codes (80 random bits each) are stored hashed. An admin can reset a user who lost their device with `DELETE /api/users/:id/mfa` (not their own: admins use `/mfa/disable` like everyone else).
+- **Non-enumerating registration** *(`AUTH_MODE=full`, with a delivering mailer)*: `POST /api/auth/register` answers `202` with no account data for new and taken addresses alike, takes the same time either way, and emails the owner of a taken address.
 - **No existence oracle**: a task or session that belongs to someone else answers 404, exactly like a missing one.
 - **Audit trail**: logins (successful and failed), logout, registration, user creation, block/unblock, role changes, password changes and resets, MFA enable/disable/reset, email verification, session revocations, token reuse and task changes. Entries older than `AUDIT_RETENTION_DAYS` (default 90, `0` keeps everything) are purged by the cleanup job.
 - **Roles**: `PATCH /api/users/:id/role` promotes or demotes; the system can never be left without an active administrator (delete, suspend and demote are all checked inside a transaction).
 
 ### Pre-seeded Demo Credentials
 
-Created automatically **only when `NODE_ENV` is not `production`** and the database has no users. Never rely on them outside local development.
+Created automatically **only when `SEED_DEMO=true`** (never in production, where the flag is refused at startup) and the database has no users. Never rely on them outside local development. The `npm run test:e2e` suite needs them, so keep `SEED_DEMO=true` in your local `.env`.
 
 | Role | Name | Email | Password | Permissions |
 |---|---|---|---|---|
@@ -379,7 +384,7 @@ This works because every router in `src/routes/` is exported as one **chained** 
 
 Just like in NestJS / Prisma Eager Loading, endpoints support dynamic relational expansion via the `?include=` query parameter, avoiding N+1 roundtrips:
 
-- **List users with embedded tasks and active sessions:**
+- **List users with embedded tasks and active sessions** (the 50 most recent of each):
   ```http
   GET /api/users?include=tasks,sessions
   ```
@@ -459,7 +464,7 @@ The tables describe the default `AUTH_MODE=full`. With `basic`, the recovery, ve
 ### Authentication (`/api/auth`)
 | Method | Endpoint | Description | Rate Limit |
 |---|---|---|---|
-| `POST` | `/api/auth/register` | Public sign-up (always `user` role) | 5 req/hour |
+| `POST` | `/api/auth/register` | Public sign-up (always `user` role). With `AUTH_MODE=full` and a delivering mailer it answers `202` with no account data whether or not the address is taken; the owner of a taken address is emailed instead. Otherwise `201`, or `409` for a taken address | 5 req/hour |
 | `POST` | `/api/auth/login` | Authenticate, create database session, issue tokens (account lockout after 5 failures) | 10 req/min |
 | `POST` | `/api/auth/refresh` | Renew token pair with **Token Rotation** (`409` on concurrent refresh) | 30 req/min |
 | `POST` | `/api/auth/logout` | Deactivate session and revoke refresh tokens | No |
@@ -475,7 +480,7 @@ The tables describe the default `AUTH_MODE=full`. With `basic`, the recovery, ve
 ### Session Management (`/api/sessions`)
 | Method | Endpoint | Description | Auth |
 |---|---|---|---|
-| `GET` | `/api/sessions/me` | List all active/inactive sessions with IP & User-Agent | Bearer |
+| `GET` | `/api/sessions/me` | List your sessions with IP & User-Agent, paginated (`?page`, `?limit` up to 100, default 50; `count` is the total) | Bearer |
 | `DELETE` | `/api/sessions/:sessionId` | **Revoke specific session**: Instantly kicks device (own sessions; Admin can revoke any) | Bearer |
 | `POST` | `/api/sessions/revoke-all` | **Revoke all sessions**: Closes all active devices | Bearer |
 
@@ -497,13 +502,13 @@ The tables describe the default `AUTH_MODE=full`. With `basic`, the recovery, ve
 |---|---|---|---|
 | `GET` | `/api/users` | Paginated users list (`?page=1&limit=10&search=ana&role=user&include=tasks,sessions&includeDeleted=true&sort=-createdAt,name&filter[role]=user`) | Admin |
 | `GET` | `/api/users/:id` | Get user details (`?include=tasks,sessions`); Admin, or the user themselves | Bearer |
-| `POST` | `/api/users` | Create user with any role (public sign-up lives at `/api/auth/register`) | Admin |
+| `POST` | `/api/users` | Create user with any role (public sign-up lives at `/api/auth/register`). With `AUTH_MODE=full` and a delivering mailer, the new account gets its verification link | Admin |
 | `PUT` | `/api/users/:id` | Update own user profile (or any profile if Admin). Changing your own password or email needs `currentPassword`; a password change revokes other sessions | Bearer |
 | `DELETE` | `/api/users/:id/mfa` | *Admin only*: remove a user's 2FA (lost device) and revoke their sessions | Admin |
 | `PATCH` | `/api/users/:id/role` | **Promote / demote** *(Admin only)*: cannot change your own role or demote the last active admin | Admin |
 | `PATCH` | `/api/users/:id/block` | **Suspend / Reactivate User** *(Admin only)*: Immediately revokes all active sessions | Admin |
 | `POST` | `/api/users/:id/revoke-sessions` | Terminate all active sessions for a target user (self or Admin) | Bearer |
-| `DELETE` | `/api/users/:id` | Delete own account (or any if Admin). **Soft-delete** by default, `?permanent=true` for cascade | Bearer |
+| `DELETE` | `/api/users/:id` | Delete own account (or any if Admin). **Soft-delete** by default, `?permanent=true` for cascade. Deleting your own account needs `{ "currentPassword": "..." }` in the body (also for Admins) | Bearer |
 
 
 ### Audit & Security Logs (`/api/audit-logs`)
@@ -543,7 +548,7 @@ Runs end-to-end HTTP tests against an active server instance:
 npm run test:e2e
 ```
 
-The script targets `http://localhost:3011` and relies on the **demo accounts, so it only works outside production**. It changes data (it suspends and reactivates Ana and revokes one of her sessions) and signs in five times, so wait a minute between runs to stay under the login rate limit (10/min per IP).
+The script targets `http://localhost:3011` and relies on the **demo accounts (`SEED_DEMO=true`), so it only works outside production**. It changes data (it suspends and reactivates Ana and revokes one of her sessions) and signs in five times, so wait a minute between runs to stay under the login rate limit (10/min per IP).
 
 ### 3. Code Formatting & Linting (Biome)
 Fast Rust-powered linter and formatter:
@@ -587,11 +592,12 @@ All settings are environment variables, validated at startup (the process exits 
 |---|---|---|
 | `AUTH_MODE` | `full` | `none` (no users, public API), `basic` (users and sessions, no email/recovery/2FA) or `full`. See [Authentication Modes](#-authentication-modes-auth_mode) |
 | `JWT_SECRET` / `JWT_REFRESH_SECRET` | — (**required unless `AUTH_MODE=none`**) | HS256 signing secrets, at least 16 characters. **In production: at least 32 characters and different from each other.** Generate with `openssl rand -base64 48` |
-| `NODE_ENV` | `development` | `development`, `production` or `test`. Production disables the demo seeder and, by default, the docs |
+| `NODE_ENV` | `development` | `development`, `production` or `test`. Production disables the docs by default and refuses `SEED_DEMO` |
+| `SEED_DEMO` | `false` | Seeds the demo accounts and tasks into an empty database. Development only: the app refuses to start with it in production |
 | `PORT` | `3011` | HTTP port |
 | `DATABASE_URL` | `file:./dev.db` (`file:/app/data/prod.db` in the Docker image) | Local SQLite file (relative paths resolve from the working directory) |
 | `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` | — | Use a remote Turso/libSQL database instead of the local file |
-| `TRUST_PROXY` | `false` | Trust `X-Forwarded-For` for client IPs (enable only behind a trusted reverse proxy that appends to it, e.g. Traefik or Nginx) |
+| `TRUST_PROXY` | `false` | Trust `X-Forwarded-For` for client IPs (enable only behind a trusted reverse proxy that appends to it, e.g. Traefik or Nginx). **Behind any reverse proxy you must set it to `true`**: otherwise every user shares the proxy's IP and therefore one rate-limit budget. Production logs a warning when it is off |
 | `TRUST_PROXY_HOPS` | `1` | Number of trusted proxies in front of the API (`2` for e.g. Cloudflare + Traefik). Without a proxy header of that depth the socket address is used |
 | `CORS_ORIGINS` | `*` outside production, none in production | Comma-separated allowed origins. In production you must list your frontends (or set `*` explicitly) |
 | `ENABLE_DOCS` | `true` outside production | Expose `/docs` and `/openapi.json` |
@@ -638,9 +644,9 @@ docker compose --env-file .env.production logs -f
 docker compose --env-file .env.production down
 ```
 
-Compose evaluates the whole file on every command, so pass `--env-file` to all of them (or `export COMPOSE_ENV_FILES=.env.production` once). The compose file forwards every variable of the [Configuration](#-configuration) table except `PORT` (fixed to `3011` inside the container) and `DATABASE_URL` (fixed to `file:/app/data/prod.db` on the persistent volume; the image also defaults to it, so even `docker run` without the variable keeps data on the volume). The named volume `sqlite_data` keeps your SQLite database across restarts, and on startup the entrypoint runs `prisma migrate deploy` (see [Database migrations](#database-migrations)). Docs are off in production unless you set `ENABLE_DOCS=true`.
+Compose evaluates the whole file on every command, so pass `--env-file` to all of them (or `export COMPOSE_ENV_FILES=.env.production` once). The compose file forwards every variable of the [Configuration](#-configuration) table except `PORT` (fixed to `3011` inside the container) and `DATABASE_URL` (fixed to `file:/app/data/prod.db` on the persistent volume; the image also defaults to it, so even `docker run` without the variable keeps data on the volume). `SEED_DEMO` is not forwarded at all: demo data does not belong in production. The named volume `sqlite_data` keeps your SQLite database across restarts, and on startup the entrypoint runs `prisma migrate deploy` (see [Database migrations](#database-migrations)). Docs are off in production unless you set `ENABLE_DOCS=true`.
 
-The container runs fine with `docker run --read-only --tmpfs /tmp -v <volume>:/app/data ...`: the Prisma schema engine is downloaded when the image is built, not on first start. The published port is bound to `127.0.0.1`; put a reverse proxy on the same host in front of it (or attach the service to the proxy's network instead of publishing the port). `scripts/docker-smoke.sh <image>` runs this exact check, and CI runs it on every push.
+The container runs fine with `docker run --read-only --tmpfs /tmp -v <volume>:/app/data ...`: the Prisma schema engine is downloaded when the image is built, not on first start. The published port is bound to `127.0.0.1`; put a reverse proxy on the same host in front of it (or attach the service to the proxy's network instead of publishing the port). `scripts/docker-smoke.sh <image>` runs this exact check, and CI runs it on every push and pull request to `main`.
 
 **Backups:** the image has no `sqlite3` binary. Back up the volume with a throwaway container (replace `<project>_sqlite_data` with the volume name shown by `docker volume ls`):
 
@@ -653,6 +659,16 @@ docker run --rm -v <project>_sqlite_data:/data -v "$PWD/backups:/backups" alpine
 ---
 
 ## 🆕 What's New
+
+**Unreleased** (see the pull request that introduced them before deploying)
+- **Breaking:** with `AUTH_MODE=full` and a delivering mailer, `POST /api/auth/register` answers `202` with no account data, for new and taken addresses alike (previously `201`/`409`).
+- **Breaking:** `DELETE /api/users/:id` on your own account requires `{ "currentPassword": "..." }` in the body, admins included. Admins deleting another user are unchanged.
+- **Breaking:** demo accounts are seeded only with `SEED_DEMO=true`, and the app refuses that flag in production.
+- **Breaking:** `GET /api/sessions/me` is paginated (default 50), and `count` is the total.
+- Password-confirmation lockout: a password reset now clears it; a wrong 2FA code when disabling 2FA counts towards it.
+- Production warns at startup when `TRUST_PROXY` is off; the migration guard no longer depends on the working directory.
+- Accounts created by an admin receive the verification link (`AUTH_MODE=full`); user responses cap embedded tasks and sessions at 50.
+- CI audits all dependencies (dev tooling included) and runs the Docker smoke test.
 
 > **Version 2.0.0.** Major bump because some changes break existing API clients: `PUT /api/users/:id` needs `currentPassword` to change your own email or password, validation messages are now in English, and `Task.userId` can be `null` (also in the typed `hc<AppType>` client). Apply the new migrations (`npm run db:deploy`, automatic in Docker) and review the new variables (`AUTH_MODE`, mail, MFA) in [Configuration](#-configuration).
 

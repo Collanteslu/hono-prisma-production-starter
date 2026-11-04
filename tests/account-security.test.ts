@@ -115,6 +115,31 @@ describe("Password recovery", () => {
     expect(again.status).toBe(400);
   });
 
+  it("the reset also lifts the password-confirmation lockout", async () => {
+    const user = await createTestUser();
+    const before = outbox.length;
+    const changePassword = (token: string, currentPassword: string) =>
+      app.request(`/api/users/${user.user.id}`, {
+        method: "PUT",
+        headers: bearer(token),
+        body: JSON.stringify({ password: "another-pass-33", currentPassword }),
+      });
+
+    // Five wrong confirmations lock password changes for this account
+    for (let i = 0; i < 5; i++)
+      expect((await changePassword(user.accessToken, "wrong-pass-1")).status).toBe(403);
+    expect((await changePassword(user.accessToken, user.password)).status).toBe(429);
+
+    await post("/api/auth/forgot-password", { email: user.email });
+    const token = await tokenEmailedTo(user.email, before);
+    expect(
+      (await post("/api/auth/reset-password", { token, password: "brand-new-pass-1" })).status,
+    ).toBe(200);
+
+    const fresh = await login(user.email, "brand-new-pass-1");
+    expect((await changePassword(fresh.accessToken, "brand-new-pass-1")).status).toBe(200);
+  });
+
   it("rejects garbage, expired and wrong-type tokens", async () => {
     const user = await createTestUser();
     const before = outbox.length;
@@ -243,9 +268,11 @@ describe("Two-factor authentication", () => {
     );
     const { secret } = (await setup.json()).data as { secret: string; otpauthUrl: string };
     // Use the next time step so the login codes below still fall after it
-    const enable = await post("/api/auth/mfa/enable", { code: totpCode(secret) }, user.accessToken);
+    // Keep the exact code used to confirm: re-deriving it later could fall into the next 30 s window
+    const enableCode = totpCode(secret);
+    const enable = await post("/api/auth/mfa/enable", { code: enableCode }, user.accessToken);
     const { recoveryCodes } = (await enable.json()).data as { recoveryCodes: string[] };
-    return { user, secret, recoveryCodes, enableStatus: enable.status };
+    return { user, secret, enableCode, recoveryCodes, enableStatus: enable.status };
   }
 
   const loginWith = (email: string, extra: Record<string, string> = {}) =>
@@ -303,7 +330,7 @@ describe("Two-factor authentication", () => {
   });
 
   it("login needs the second factor, rejects replays and bad codes, accepts recovery codes once", async () => {
-    const { user, secret, recoveryCodes, enableStatus } = await enroll();
+    const { user, secret, enableCode, recoveryCodes, enableStatus } = await enroll();
     expect(enableStatus).toBe(200);
 
     const missing = await loginWith(user.email);
@@ -311,7 +338,7 @@ describe("Two-factor authentication", () => {
     expect((await missing.json()).details).toEqual({ code: "MFA_REQUIRED" });
 
     // The enable step already consumed the current time step: the same code is a replay
-    const replay = await loginWith(user.email, { totpCode: totpCode(secret) });
+    const replay = await loginWith(user.email, { totpCode: enableCode });
     expect(replay.status).toBe(401);
     expect((await replay.json()).details).toEqual({ code: "MFA_INVALID" });
 
@@ -333,6 +360,21 @@ describe("Two-factor authentication", () => {
       expect((await loginWith(user.email, { totpCode: "123456" })).status).toBe(401);
     }
     expect((await loginWith(user.email, { totpCode: "123456" })).status).toBe(429);
+  });
+
+  it("wrong codes when disabling count towards the lockout, even with the right password", async () => {
+    const { user, recoveryCodes } = await enroll();
+    const session = await login(user.email, user.password, { recoveryCode: recoveryCodes[1] });
+    const disable = (factor: Record<string, string>) =>
+      post(
+        "/api/auth/mfa/disable",
+        { currentPassword: user.password, ...factor },
+        session.accessToken,
+      );
+
+    for (let i = 0; i < 5; i++) expect((await disable({ code: "123456" })).status).toBe(403);
+    // Locked: even the valid recovery code is refused until the lockout window passes
+    expect((await disable({ recoveryCode: recoveryCodes[2] })).status).toBe(429);
   });
 
   it("is never exposed through the users API", async () => {
@@ -580,5 +622,40 @@ describe("Emailed tokens after an email or password change", () => {
     expect(
       (await post("/api/auth/reset-password", { token, password: "brand-new-pass-1" })).status,
     ).toBe(400);
+  });
+});
+
+describe("Registration does not reveal which addresses have accounts", () => {
+  it("answers the same 202 for a new and a taken address, and mails the owner of the taken one", async () => {
+    const owner = await createTestUser();
+    const before = outbox.length;
+
+    const taken = await post("/api/auth/register", {
+      name: "Someone Else",
+      email: owner.email,
+      password: "another-pass-44",
+    });
+    const fresh = await post("/api/auth/register", {
+      name: "New Person",
+      email: `fresh-${randomUUID()}@example.com`,
+      password: "another-pass-44",
+    });
+
+    expect(taken.status).toBe(202);
+    expect(fresh.status).toBe(202);
+    expect(await taken.json()).toMatchObject({ success: true, data: null });
+    expect(await fresh.json()).toMatchObject({ success: true, data: null });
+
+    // The owner learns about the attempt; the password of the existing account is untouched
+    await vi.waitFor(() => {
+      if (
+        !outbox
+          .slice(before)
+          .some((m) => m.to === owner.email && m.subject.includes("Someone tried"))
+      )
+        throw new Error("no notice yet");
+    });
+    expect(await prisma.user.count({ where: { email: owner.email } })).toBe(1);
+    await expect(login(owner.email, owner.password)).resolves.toBeDefined();
   });
 });

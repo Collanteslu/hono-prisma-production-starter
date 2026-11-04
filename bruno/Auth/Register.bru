@@ -25,4 +25,7 @@ body:json {
 docs {
   Registro público de cuentas. El rol es siempre "user" (el campo role se ignora).
   Para crear usuarios con otros roles usa POST /api/users autenticado como admin.
+  Respuesta según la configuración: con AUTH_MODE=full y correo activo (MAIL_TRANSPORT=smtp o memory)
+  responde 202 sin datos de cuenta, exista o no el email (si ya existe, su titular recibe un aviso
+  por correo). En los demás modos responde 201 con la cuenta, o 409 si el email ya está registrado.
 }

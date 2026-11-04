@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { env } from "../src/config/env.js";
 import { prisma } from "../src/db.js";
 import { app, bearer, createTestUser, jsonHeaders, login, loginAdmin } from "./helpers.js";
@@ -134,6 +134,41 @@ describe("User management", () => {
     expect(unblock.status).toBe(409);
   });
 
+  it("deleting your own account needs your current password", async () => {
+    const user = await createTestUser();
+    const del = (body?: unknown) =>
+      app.request(`/api/users/${user.user.id}`, {
+        method: "DELETE",
+        headers: bearer(user.accessToken),
+        ...(body !== undefined && { body: JSON.stringify(body) }),
+      });
+    const deletedAt = async () =>
+      (await prisma.user.findUnique({ where: { id: user.user.id } }))?.deletedAt;
+
+    expect((await del()).status).toBe(403);
+    expect((await del({ currentPassword: "wrong-pass-9" })).status).toBe(403);
+    expect(await deletedAt()).toBeNull();
+
+    expect((await del({ currentPassword: user.password })).status).toBe(200);
+    expect(await deletedAt()).not.toBeNull();
+  });
+
+  it("wrong password confirmations for account deletion lock further attempts", async () => {
+    const user = await createTestUser();
+    const del = (body: unknown) =>
+      app.request(`/api/users/${user.user.id}?permanent=true`, {
+        method: "DELETE",
+        headers: bearer(user.accessToken),
+        body: JSON.stringify(body),
+      });
+
+    for (let i = 0; i < 5; i++) {
+      expect((await del({ currentPassword: "wrong-pass-9" })).status).toBe(403);
+    }
+    expect((await del({ currentPassword: user.password })).status).toBe(429);
+    expect(await prisma.user.count({ where: { id: user.user.id } })).toBe(1);
+  });
+
   it("permanent deletion cascades sessions, refresh tokens, tasks and emailed tokens", async () => {
     const admin = await loginAdmin();
     const user = await createTestUser();
@@ -188,6 +223,8 @@ describe("User management", () => {
       const res = await app.request("/api/users/user-1", {
         method: "DELETE",
         headers: bearer(admin.accessToken),
+        // Deleting your own account re-confirms the password (also for admins)
+        body: JSON.stringify({ currentPassword: "password123" }),
       });
       expect(res.status).toBe(409);
     } finally {
@@ -308,5 +345,38 @@ describe("Task search", () => {
       "Groceries",
       "Quarterly report",
     ]);
+  });
+});
+
+describe("Admin-created accounts and session listing", () => {
+  it("an admin-created account receives the verification link in full mode", async () => {
+    const admin = await loginAdmin();
+    const email = `created-${randomUUID()}@example.com`;
+    const res = await app.request("/api/users", {
+      method: "POST",
+      headers: bearer(admin.accessToken),
+      body: JSON.stringify({ name: "Created", email, password: "password123" }),
+    });
+    expect(res.status).toBe(201);
+
+    const { outbox } = await import("../src/lib/mailer.js");
+    await vi.waitFor(() => {
+      if (!outbox.some((m) => m.to === email && m.subject.includes("Verify")))
+        throw new Error("no verification mail yet");
+    });
+  });
+
+  it("GET /api/sessions/me pages its results and counts every session", async () => {
+    const user = await createTestUser();
+    await login(user.email, user.password);
+    await login(user.email, user.password);
+
+    const res = await app.request("/api/sessions/me?limit=2&page=1", {
+      headers: bearer(user.accessToken),
+    });
+    const body = await res.json();
+    expect(body.data).toHaveLength(2);
+    expect(body.count).toBe(3);
+    expect(body.pagination).toMatchObject({ total: 3, page: 1, limit: 2, hasNextPage: true });
   });
 });

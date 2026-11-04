@@ -96,7 +96,7 @@ script:post-response {
 ```
 
 ### 4. Document Preconditions in a `docs` Block
-Requests depend on the seeded demo data and on who is logged in. State it in the request:
+Requests depend on the demo data (`SEED_DEMO=true`) and on who is logged in. State it in the request:
 ```bru
 docs {
   Only administrators: run "Login Admin" first.
@@ -106,7 +106,7 @@ docs {
 Prefer example data that does not collide with other requests (e.g. `Auth/Register` uses `registro@example.com`, `Users/Create User` uses `nuevo@example.com`).
 
 ## Verifying the Collection
-Requests are plain HTTP, so validate them with the official CLI against a server with a fresh database (demo seed data present):
+Requests are plain HTTP, so validate them with the official CLI against a server with a fresh database and `SEED_DEMO=true` (so the demo data exists):
 ```bash
 npx @usebruno/cli run "Tasks/List Tasks.bru" --env Local \
   --env-var baseUrl=http://localhost:3011 --env-var token=<access token>

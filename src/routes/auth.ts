@@ -4,12 +4,13 @@
  * Includes database-persisted session tracking and brute-force protection via rate limiting.
  */
 
-import { createRoute } from "@hono/zod-openapi";
+import { createRoute, z } from "@hono/zod-openapi";
 import { verify } from "hono/jwt";
 import { env, features } from "../config/env.js";
 import { prisma } from "../db.js";
 import { recordAudit } from "../lib/audit.js";
 import { getClientIp } from "../lib/clientIp.js";
+import { mailDelivers } from "../lib/mailer.js";
 import { createRouter, errorResponses, jsonBody, jsonResponse } from "../lib/openapi.js";
 import { buildMeta, errorResponse, successResponse } from "../lib/response.js";
 import { createLoginLockout, rateLimiter } from "../middleware/rateLimit.js";
@@ -20,7 +21,11 @@ import {
   successSchema,
   userSchema,
 } from "../schemas/responses.js";
-import { inBackground, sendVerificationEmail } from "../services/accountMail.js";
+import {
+  inBackground,
+  sendAlreadyRegisteredNotice,
+  sendVerificationEmail,
+} from "../services/accountMail.js";
 import { verifySecondFactor } from "../services/mfa.js";
 import {
   createSessionAndTokens,
@@ -54,10 +59,14 @@ const registerRoute = createRoute({
     "Crea una cuenta con rol `user` (cualquier `role` enviado se ignora). Rate limit por IP (5/hora por defecto).",
   request: jsonBody(registerSchema),
   responses: {
-    201: jsonResponse(successSchema(userSchema), "Cuenta creada"),
+    201: jsonResponse(successSchema(userSchema), "Cuenta creada (sin verificación por correo)"),
+    202: jsonResponse(
+      successSchema(z.null()),
+      "Solicitud aceptada (AUTH_MODE=full con correo activo): igual exista o no la cuenta",
+    ),
     ...errorResponses({
       400: "Error de validación",
-      409: "Email duplicado",
+      409: "Email duplicado (solo sin correo activo: con AUTH_MODE=full y correo, responde 202)",
       429: "Rate limit excedido",
     }),
   },
@@ -123,10 +132,28 @@ export const authRoutes = router
    */
   .openapi(registerRoute, async (c) => {
     const { name, email, password } = c.req.valid("json");
+    // With email verification and a mailer that delivers, the answer must not reveal whether the
+    // address is taken: the owner of a taken address is told by email instead
+    const neutral = features.accountSecurity && mailDelivers;
+    const neutralAccepted = () =>
+      successResponse(c, null, {
+        status: 202,
+        message:
+          "If the address can be registered, an email has been sent to it with the next steps.",
+      });
 
-    const existing = await prisma.user.findUnique({ where: { email }, select: { id: true } });
+    const existing = await prisma.user.findUnique({
+      where: { email },
+      select: { id: true, name: true, email: true },
+    });
     if (existing) {
-      return errorResponse(c, `Email '${email}' is already registered.`, 409);
+      if (!neutral) {
+        return errorResponse(c, `Email '${email}' is already registered.`, 409);
+      }
+      // One bcrypt comparison, like a real sign-up, so the response time does not reveal it either
+      await comparePassword(password, await getDummyHash());
+      inBackground(() => sendAlreadyRegisteredNotice(existing));
+      return neutralAccepted();
     }
 
     const newUser = await prisma.user.create({
@@ -144,6 +171,8 @@ export const authRoutes = router
     if (features.accountSecurity && env.MAIL_TRANSPORT !== "none") {
       inBackground(() => sendVerificationEmail(newUser));
     }
+
+    if (neutral) return neutralAccepted();
 
     return successResponse(c, newUser, {
       status: 201,

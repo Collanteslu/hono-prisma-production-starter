@@ -4,6 +4,7 @@
  */
 
 import { OpenAPIHono, type z } from "@hono/zod-openapi";
+import type { Context, Next } from "hono";
 import { errorSchema } from "../schemas/responses.js";
 import type { AppEnv } from "../types/index.js";
 import { buildMeta } from "./response.js";
@@ -64,4 +65,15 @@ export const jsonBody = <T extends z.ZodType>(schema: T) => ({
  */
 export function whenEnabled<T>(enabled: boolean, router: T): T {
   return enabled ? router : (createRouter() as unknown as T);
+}
+
+/**
+ * Treats an empty body as "no body" even when the client sent `Content-Type: application/json`
+ * (an empty string is not valid JSON, so the validator would answer 400). Needed for routes whose
+ * body is optional, such as DELETE, where many HTTP clients always send the JSON header. Declare it
+ * as the first route `middleware`, so it runs before the validators.
+ */
+export async function allowEmptyJsonBody(c: Context, next: Next) {
+  if ((await c.req.raw.clone().text()) === "") c.req.raw.headers.delete("content-type");
+  await next();
 }

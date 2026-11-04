@@ -4,7 +4,8 @@ import { app } from "./helpers.js";
 /** Loads src/config/env.ts with extra variables; returns the parsed env or the startup error */
 async function loadEnv(vars: Record<string, string>) {
   vi.resetModules();
-  for (const [key, value] of Object.entries(vars)) vi.stubEnv(key, value);
+  // Demo seeding is refused in production, so the suite's SEED_DEMO=true must be cleared here
+  for (const [key, value] of Object.entries({ SEED_DEMO: "", ...vars })) vi.stubEnv(key, value);
   const exit = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
     throw new Error(`process.exit(${code})`);
   }) as never);

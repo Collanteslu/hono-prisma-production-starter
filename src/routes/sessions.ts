@@ -10,8 +10,8 @@ import { createRoute, z } from "@hono/zod-openapi";
 import { prisma } from "../db.js";
 import { recordAudit } from "../lib/audit.js";
 import { createRouter, errorResponses, jsonResponse, secured } from "../lib/openapi.js";
-import { buildMeta, errorResponse, successResponse } from "../lib/response.js";
-import { sessionIdParamSchema } from "../schemas/index.js";
+import { buildMeta, buildPagination, errorResponse, successResponse } from "../lib/response.js";
+import { sessionIdParamSchema, sessionListQuerySchema } from "../schemas/index.js";
 import { sessionListResponseSchema, successSchema } from "../schemas/responses.js";
 import { revokeSession, revokeUserSessions } from "../services/sessions.js";
 
@@ -23,8 +23,9 @@ const listRoute = createRoute({
   tags: ["Sessions"],
   summary: "Listar sesiones del usuario actual",
   description:
-    "Devuelve todos los dispositivos con sesión registrada por el usuario autenticado, incluidas las sesiones ya revocadas o caducadas que la tarea de limpieza aún no ha purgado.",
+    "Devuelve los dispositivos con sesión registrada por el usuario autenticado, paginados (`page`, `limit`, por defecto 50), incluidas las sesiones ya revocadas o caducadas que la tarea de limpieza aún no ha purgado. `count` es el total.",
   security: secured,
+  request: { query: sessionListQuerySchema },
   responses: {
     200: jsonResponse(sessionListResponseSchema, "Sesiones del usuario"),
     ...errorResponses({ 401: "Token ausente, inválido o sesión revocada" }),
@@ -69,21 +70,29 @@ export const sessionRoutes = createRouter()
    */
   .openapi(listRoute, async (c) => {
     const currentUser = c.get("user");
+    const { page, limit } = c.req.valid("query");
+    const where = { userId: currentUser.userId };
 
-    const sessions = await prisma.session.findMany({
-      where: { userId: currentUser.userId },
-      orderBy: { createdAt: "desc" },
-    });
+    const [total, sessions] = await Promise.all([
+      prisma.session.count({ where }),
+      prisma.session.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+    ]);
 
     return c.json(
       {
         success: true as const,
-        count: sessions.length,
+        count: total,
         currentSessionId: currentUser.sessionId,
         data: sessions.map((s) => ({
           ...s,
           isCurrent: s.id === currentUser.sessionId,
         })),
+        pagination: buildPagination(total, page, limit),
         meta: buildMeta(c),
       },
       200,
