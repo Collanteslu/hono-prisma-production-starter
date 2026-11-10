@@ -27,11 +27,11 @@ describe("REQUIRE_EMAIL_VERIFICATION=true", () => {
     const reg = await post("/api/auth/register", {
       name: "Strict User",
       email,
-      password: "password123",
+      password: "password1234",
     });
     expect(reg.status).toBe(202);
 
-    const blocked = await post("/api/auth/login", { email, password: "password123" });
+    const blocked = await post("/api/auth/login", { email, password: "password1234" });
     expect(blocked.status).toBe(403);
     expect((await blocked.json()).details).toEqual({ code: "EMAIL_NOT_VERIFIED" });
 
@@ -46,12 +46,12 @@ describe("REQUIRE_EMAIL_VERIFICATION=true", () => {
     const token = /token=([\w-]+)/.exec(mail.text)?.[1];
     expect((await post("/api/auth/verify-email", { token })).status).toBe(200);
 
-    expect((await post("/api/auth/login", { email, password: "password123" })).status).toBe(200);
+    expect((await post("/api/auth/login", { email, password: "password1234" })).status).toBe(200);
   });
 
   it("does not let a wrong password learn whether the email is verified", async () => {
     const email = `strict-${randomUUID()}@example.com`;
-    await post("/api/auth/register", { name: "Strict User", email, password: "password123" });
+    await post("/api/auth/register", { name: "Strict User", email, password: "password1234" });
     const res = await post("/api/auth/login", { email, password: "wrong-password-1" });
     expect(res.status).toBe(401);
   });

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { env } from "../src/config/env.js";
 import { prisma } from "../src/db.js";
+import { outbox } from "../src/lib/mailer.js";
 import { app, bearer, createTestUser, jsonHeaders, login, loginAdmin } from "./helpers.js";
 
 describe("User management", () => {
@@ -24,6 +25,69 @@ describe("User management", () => {
     expect(other.status).toBe(401);
 
     await expect(login(user.email, "new-password-456")).resolves.toBeDefined();
+  });
+
+  it("keeps an email change pending until confirmed, then revokes every session", async () => {
+    const user = await createTestUser();
+    const otherDevice = await login(user.email, user.password);
+    const newEmail = `moved-${randomUUID()}@example.com`;
+
+    const res = await app.request(`/api/users/${user.user.id}`, {
+      method: "PUT",
+      headers: bearer(user.accessToken),
+      body: JSON.stringify({ email: newEmail, currentPassword: user.password }),
+    });
+    expect(res.status).toBe(200);
+
+    const pending = await prisma.user.findUniqueOrThrow({ where: { id: user.user.id } });
+    expect(pending.email).toBe(user.email);
+    expect(pending.pendingEmail).toBe(newEmail);
+    // Nothing moved yet: both devices keep working while the new mailbox is unconfirmed
+    expect(
+      (await app.request("/api/sessions/me", { headers: bearer(otherDevice.accessToken) })).status,
+    ).toBe(200);
+
+    // Resending from the current address must reach the pending one, not the old mailbox
+    const mailedBefore = outbox.filter((m) => m.to === newEmail).length;
+    expect(
+      (
+        await app.request("/api/auth/resend-verification", {
+          method: "POST",
+          headers: jsonHeaders,
+          body: JSON.stringify({ email: user.email }),
+        })
+      ).status,
+    ).toBe(202);
+    await vi.waitFor(() => {
+      expect(outbox.filter((m) => m.to === newEmail).length).toBeGreaterThan(mailedBefore);
+    });
+
+    const mail = await vi.waitFor(() => {
+      // Resending replaces the previous token, so the newest mail is the valid one
+      const found = outbox.filter((m) => m.to === newEmail).at(-1);
+      if (!found) throw new Error("no confirmation mail yet");
+      return found;
+    });
+    const token = /token=([\w-]+)/.exec(mail.text)?.[1];
+    if (!token) throw new Error("no token in mail");
+    expect(
+      (
+        await app.request("/api/auth/verify-email", {
+          method: "POST",
+          headers: jsonHeaders,
+          body: JSON.stringify({ token }),
+        })
+      ).status,
+    ).toBe(200);
+
+    const changed = await prisma.user.findUniqueOrThrow({ where: { id: user.user.id } });
+    expect(changed.email).toBe(newEmail);
+    expect(changed.pendingEmail).toBeNull();
+    expect(changed.emailVerifiedAt).not.toBeNull();
+    expect(
+      (await app.request("/api/sessions/me", { headers: bearer(otherDevice.accessToken) })).status,
+    ).toBe(401);
+    await expect(login(newEmail, user.password)).resolves.toBeDefined();
   });
 
   it("changing your own password requires the current one and changes nothing otherwise", async () => {
@@ -224,7 +288,7 @@ describe("User management", () => {
         method: "DELETE",
         headers: bearer(admin.accessToken),
         // Deleting your own account re-confirms the password (also for admins)
-        body: JSON.stringify({ currentPassword: "password123" }),
+        body: JSON.stringify({ currentPassword: "password1234" }),
       });
       expect(res.status).toBe(409);
     } finally {
@@ -355,7 +419,7 @@ describe("Admin-created accounts and session listing", () => {
     const res = await app.request("/api/users", {
       method: "POST",
       headers: bearer(admin.accessToken),
-      body: JSON.stringify({ name: "Created", email, password: "password123" }),
+      body: JSON.stringify({ name: "Created", email, password: "password1234" }),
     });
     expect(res.status).toBe(201);
 

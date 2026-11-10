@@ -60,7 +60,7 @@ describe("Registration and user creation", () => {
       body: JSON.stringify({
         name: "Mallory",
         email: `  Mallory-${Date.now()}@Example.com `,
-        password: "password123",
+        password: "password1234",
         role: "admin",
       }),
     });
@@ -71,7 +71,7 @@ describe("Registration and user creation", () => {
     expect(created?.email).toMatch(/^mallory-\d+@example\.com$/);
   });
 
-  it("enforces the password policy (min 8 chars)", async () => {
+  it("enforces the password policy (min 12 chars)", async () => {
     const res = await app.request("/api/auth/register", {
       method: "POST",
       headers: jsonHeaders,
@@ -92,7 +92,7 @@ describe("Registration and user creation", () => {
       body: JSON.stringify({
         name: "Eve",
         email: `eve-${Date.now()}@example.com`,
-        password: "password123",
+        password: "password1234",
       }),
     });
     expect(res.status).toBe(403);
@@ -106,7 +106,7 @@ describe("Registration and user creation", () => {
       body: JSON.stringify({
         name: "Second Admin",
         email: `admin2-${Date.now()}@example.com`,
-        password: "password123",
+        password: "password1234",
         role: "admin",
       }),
     });
@@ -214,7 +214,7 @@ describe("Authorization is evaluated against the database", () => {
     const locked = await app.request("/api/auth/login", {
       method: "POST",
       headers: jsonHeaders,
-      body: JSON.stringify({ email, password: "password123" }),
+      body: JSON.stringify({ email, password: "password1234" }),
     });
     expect(locked.status).toBe(429);
   });
@@ -235,5 +235,45 @@ describe("Authorization is evaluated against the database", () => {
   it("login still works for the seeded admin", async () => {
     const session = await login("admin@example.com");
     expect(session.user.role).toBe("admin");
+  });
+});
+
+describe("HTTP hardening", () => {
+  it("marks API responses as non-cacheable and varies on Authorization", async () => {
+    const user = await createTestUser();
+    const res = await app.request("/api/sessions/me", { headers: bearer(user.accessToken) });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.headers.get("pragma")).toBe("no-cache");
+    expect(res.headers.get("vary")?.toLowerCase()).toContain("authorization");
+  });
+
+  it("sends a strict CSP to the API and a docs-specific one to Scalar", async () => {
+    const health = await app.request("/healthz");
+    expect(health.headers.get("content-security-policy")).toContain("default-src 'none'");
+
+    const docs = await app.request("/docs");
+    expect(docs.status).toBe(200);
+    const csp = docs.headers.get("content-security-policy") ?? "";
+    expect(csp).toContain("https://cdn.jsdelivr.net");
+    expect(csp).toContain("frame-ancestors 'none'");
+  });
+
+  it("truncates oversized User-Agent values in sessions and audit logs", async () => {
+    const user = await createTestUser();
+    const res = await app.request("/api/auth/login", {
+      method: "POST",
+      headers: { ...jsonHeaders, "User-Agent": "A".repeat(2000) },
+      body: JSON.stringify({ email: user.email, password: user.password }),
+    });
+    expect(res.status).toBe(200);
+    const { sessionId } = await res.json();
+
+    const session = await prisma.session.findUniqueOrThrow({ where: { id: sessionId } });
+    expect(session.userAgent).toHaveLength(512);
+    const audit = await prisma.auditLog.findFirstOrThrow({
+      where: { action: "LOGIN", entityId: sessionId },
+    });
+    expect(audit.userAgent).toHaveLength(512);
   });
 });

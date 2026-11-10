@@ -83,7 +83,8 @@ export async function applySqlitePragmas(): Promise<void> {
 export async function seedDatabase() {
   // AUTH_MODE=none has no users: outside production, seed a couple of public example tasks
   if (!features.auth) {
-    if (env.NODE_ENV === "production" || !env.SEED_DEMO) return;
+    if (env.NODE_ENV !== "development" && env.NODE_ENV !== "test") return;
+    if (!env.SEED_DEMO) return;
     if ((await prisma.task.count({ where: { userId: null } })) === 0) {
       await prisma.task.createMany({
         data: [
@@ -125,12 +126,15 @@ export async function seedDatabase() {
     return;
   }
 
+  // Belt and braces: production already returned above and `.env.example` ships SEED_DEMO=false.
+  if (env.NODE_ENV !== "development" && env.NODE_ENV !== "test") return;
   if (!env.SEED_DEMO) return;
 
   if (usersCount === 0) {
+    logger.warn("SEED_DEMO=true: creating demo accounts with known credentials (development only)");
     logger.info("🌱 Initializing database with default seeded accounts and tasks...");
 
-    const hashedPassword = await hashPassword("password123");
+    const hashedPassword = await hashPassword("password1234");
 
     // 1. Create Admin User
     const admin = await prisma.user.create({

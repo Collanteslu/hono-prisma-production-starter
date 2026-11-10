@@ -22,11 +22,12 @@ npx prisma migrate deploy  # creates/updates dev.db
 npm run dev                # http://localhost:3011 (docs at /docs)
 ```
 
-With `SEED_DEMO=true` (set in `.env.example`; the app refuses to start with it in production) an empty
-database is seeded with demo data (`admin@example.com` / `ana@example.com`, password `password123`; with
-`AUTH_MODE=none`, two public tasks). Without it nothing is seeded, so a deployment that forgets
-`NODE_ENV` gets no known admin. Environment variables are validated in `src/config/env.ts` and the
-process exits with a readable message when a combination is invalid.
+With `SEED_DEMO=true` (opt-in in a local `.env`; `.env.example` ships it disabled and the app refuses
+to start with it in production) an empty database is seeded with demo data (`admin@example.com` /
+`ana@example.com`, password `password1234`; with `AUTH_MODE=none`, two public tasks). Without it
+nothing is seeded, so a deployment that copies `.env.example` gets no known admin. Environment
+variables are validated in `src/config/env.ts` and the process exits with a readable message when a
+combination is invalid.
 
 ## Checks (all must pass before opening a PR)
 
@@ -99,7 +100,8 @@ How it is wired, so new code follows the same pattern:
 7. **Security:** enforce ownership (`resource.userId === c.get("user").userId`; a resource of someone else
    answers 404); admin routes use `middleware: [requireAdmin] as const` (the role is read from the database,
    not the JWT); client IPs only via `getClientIp(c)`; multi-step writes (block/delete + session
-   revocation, token rotation, password/email change + token invalidation) inside `prisma.$transaction`.
+   revocation, token rotation, password change + session revocation, email change + pending-email
+   token invalidation/confirmation) inside `prisma.$transaction`.
    Sensitive self-service actions (changing your own password or email, deleting your own account, enrolling
    or disabling 2FA) re-confirm the password with `currentPassword` and use the shared password-confirmation
    lockout (`passwordConfirmKey` / `passwordConfirmLockout`).

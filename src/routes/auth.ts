@@ -87,6 +87,7 @@ const loginRoute = createRoute({
       401: "Credenciales inválidas, o falta/es incorrecto el código 2FA (`details.code`: `MFA_REQUIRED` o `MFA_INVALID`)",
       403: "Cuenta suspendida, o email sin verificar (`details.code`: `EMAIL_NOT_VERIFIED`)",
       429: "Rate limit excedido o cuenta bloqueada temporalmente",
+      503: "El segundo factor no está disponible temporalmente (`details.code`: `MFA_UNAVAILABLE`)",
     }),
   },
 });
@@ -237,7 +238,22 @@ export const authRoutes = router
       if (!totpCode && !recoveryCode) {
         return errorResponse(c, "Two-factor code required.", 401, { code: "MFA_REQUIRED" });
       }
-      if (!(await verifySecondFactor(user, { code: totpCode, recoveryCode }))) {
+      const factor = await verifySecondFactor(user, { code: totpCode, recoveryCode });
+      if (factor === "unreadable") {
+        await recordAudit(c, {
+          userId: user.id,
+          action: "LOGIN_FAILED",
+          entity: "Session",
+          details: { email, reason: "mfa_unavailable" },
+        });
+        return errorResponse(
+          c,
+          "Two-factor authentication is temporarily unavailable. Please contact support.",
+          503,
+          { code: "MFA_UNAVAILABLE" },
+        );
+      }
+      if (factor !== "ok") {
         await loginLockout.recordFailure(email);
         await recordAudit(c, {
           userId: user.id,

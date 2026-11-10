@@ -129,15 +129,31 @@ export function encryptSecret(plain: string): string {
     .join(".");
 }
 
+/** Raised when a stored TOTP secret cannot be read (corrupt data or a rotated encryption key) */
+export class MfaSecretError extends Error {
+  constructor(message = "Stored MFA secret could not be decrypted") {
+    super(message);
+    this.name = "MfaSecretError";
+  }
+}
+
 export function decryptSecret(stored: string): string {
-  const [version, iv, tag, data] = stored.split(".");
-  if (version !== "v1" || !iv || !tag || !data) throw new Error("Unsupported secret format");
-  const decipher = createDecipheriv("aes-256-gcm", encryptionKey(), Buffer.from(iv, "base64url"));
-  decipher.setAuthTag(Buffer.from(tag, "base64url"));
-  return Buffer.concat([
-    decipher.update(Buffer.from(data, "base64url")),
-    decipher.final(),
-  ]).toString("utf8");
+  try {
+    const [version, iv, tag, data] = stored.split(".");
+    if (version !== "v1" || !iv || !tag || !data) throw new Error("Unsupported secret format");
+    const decipher = createDecipheriv("aes-256-gcm", encryptionKey(), Buffer.from(iv, "base64url"));
+    decipher.setAuthTag(Buffer.from(tag, "base64url"));
+    return Buffer.concat([
+      decipher.update(Buffer.from(data, "base64url")),
+      decipher.final(),
+    ]).toString("utf8");
+  } catch (error) {
+    throw new MfaSecretError(
+      error instanceof Error
+        ? `Stored MFA secret could not be decrypted: ${error.message}`
+        : "Stored MFA secret could not be decrypted",
+    );
+  }
 }
 
 // --- Recovery codes -------------------------------------------------------------------------

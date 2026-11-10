@@ -63,8 +63,35 @@ if (features.auth) {
 // 1. Request tracing: Generates or forwards X-Request-Id (UUID v4)
 app.use("*", requestIdMiddleware);
 
-// 2. HTTP Security: Injects HSTS, XSS Protection, CSP, No-Sniff, and Frameguard headers
+// 2. HTTP Security: HSTS, no-sniff, frameguard and referrer policy. CSP and cache control are
+// applied below so the JSON API and the Scalar docs page can have different policies.
 app.use("*", secureHeaders());
+
+// Strict by default: API responses are JSON and must never load anything. /docs is the only HTML
+// page and needs Scalar's bundle from jsDelivr (plus its inline bootstrap script).
+const API_CSP = "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+const DOCS_CSP = [
+  "default-src 'none'",
+  "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
+  "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
+  "img-src 'self' data: https:",
+  "font-src 'self' data: https://cdn.jsdelivr.net",
+  "connect-src 'self'",
+  "base-uri 'none'",
+  "form-action 'none'",
+  "frame-ancestors 'none'",
+].join("; ");
+
+app.use("*", async (c, next) => {
+  await next();
+  c.header("Content-Security-Policy", c.req.path === "/docs" ? DOCS_CSP : API_CSP);
+  // Tokens and authenticated payloads must not be stored by browsers or shared proxies.
+  if (c.req.path === "/api" || c.req.path.startsWith("/api/")) {
+    c.header("Cache-Control", "no-store");
+    c.header("Pragma", "no-cache");
+    c.header("Vary", "Authorization", { append: true });
+  }
+});
 
 // 3. HTTP access logger with response time calculation (routed through the structured Pino logger).
 // hono/logger colours the status code with ANSI escapes; they are noise in the JSON lines that
@@ -115,6 +142,9 @@ app.use(
  */
 // Documentation is enabled by default outside production (override with ENABLE_DOCS)
 const docsEnabled = env.ENABLE_DOCS ?? env.NODE_ENV !== "production";
+// Uptime and database latency are useful while debugging, but they are operational details in
+// production: keep them out of the public healthcheck unless explicitly enabled.
+const healthDetails = env.HEALTH_DETAILS ?? env.NODE_ENV !== "production";
 if (docsEnabled) {
   // OpenAPI 3.0 specification generated from the route definitions and Zod schemas
   app.doc("/openapi.json", {
@@ -185,10 +215,10 @@ const withHealth = app.openapi(healthRoute, async (c) => {
       {
         status: "healthy" as const,
         timestamp: new Date().toISOString(),
-        uptimeSeconds: Math.floor(process.uptime()),
+        ...(healthDetails && { uptimeSeconds: Math.floor(process.uptime()) }),
         database: {
           status: "connected" as const,
-          latencyMs: dbLatencyMs,
+          ...(healthDetails && { latencyMs: dbLatencyMs }),
         },
       },
       200,

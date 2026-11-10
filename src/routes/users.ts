@@ -37,7 +37,8 @@ import {
 import { successSchema, userSchema } from "../schemas/responses.js";
 import {
   inBackground,
-  sendEmailChangedNotice,
+  sendEmailChangeRequestedNotice,
+  sendEmailChangeVerification,
   sendVerificationEmail,
 } from "../services/accountMail.js";
 import { deletePendingAuthTokensOp } from "../services/authTokens.js";
@@ -184,17 +185,18 @@ const updateRoute = createRoute({
   tags: ["Users"],
   summary: "Actualizar usuario",
   description:
-    "Actualiza nombre, email o contraseña. Solo Admin o el propio usuario. Cambiar la contraseña revoca el resto de sesiones de la cuenta.",
+    "Actualiza nombre, email o contraseña. Solo Admin o el propio usuario. Cambiar la contraseña revoca el resto de sesiones. Con correo configurado, el email nuevo queda pendiente hasta que se confirme desde ese buzón; la dirección actual sigue activa mientras tanto.",
   security: secured,
   request: { params: idParamSchema, ...jsonBody(updateUserSchema) },
   responses: {
-    200: jsonResponse(successSchema(userSchema), "Perfil actualizado"),
+    200: jsonResponse(successSchema(userSchema), "Perfil actualizado o cambio de email pendiente"),
     ...errorResponses({
-      400: "Error de validación",
+      400: "Error de validación, o email y contraseña en la misma petición",
       ...adminErrors,
       404: "Usuario no encontrado",
       409: "Email en uso",
       429: "Demasiadas confirmaciones de contraseña incorrectas",
+      503: "No hay transporte de correo para verificar la nueva dirección",
     }),
   },
 });
@@ -490,7 +492,7 @@ export const userRoutes = router
   /**
    * PUT /api/users/:id
    * Updates user profile information (Admin or the user themselves).
-   * Changing the password revokes every other session of the account.
+   * Changing the password or email revokes every other session of the account.
    */
   .openapi(updateRoute, async (c) => {
     const { id } = c.req.valid("param");
@@ -517,6 +519,7 @@ export const userRoutes = router
     // password or email (the password-reset address) requires the current password. Admins
     // modifying someone else are exempt.
     const emailChanging = Boolean(email && email !== existingUser.email);
+    const emailChangeNeedsVerification = features.accountSecurity && env.MAIL_TRANSPORT !== "none";
     if ((password || emailChanging) && currentUser.userId === id) {
       const retryAfter = await passwordConfirmLockout.retryAfterSeconds(passwordConfirmKey(id));
       if (retryAfter > 0) {
@@ -539,8 +542,27 @@ export const userRoutes = router
       await passwordConfirmLockout.reset(passwordConfirmKey(id));
     }
 
-    if (email && email !== existingUser.email) {
-      const emailTaken = await prisma.user.findUnique({ where: { email }, select: { id: true } });
+    if (password && emailChanging) {
+      return errorResponse(
+        c,
+        "Change the email address and the password in separate requests.",
+        400,
+      );
+    }
+    if (emailChanging && features.accountSecurity && env.MAIL_TRANSPORT === "none") {
+      return errorResponse(
+        c,
+        "Email changes need a configured mail transport so the new address can be verified.",
+        503,
+        { code: "EMAIL_CHANGE_UNAVAILABLE" },
+      );
+    }
+    if (emailChanging) {
+      // A pending address is reserved too: two accounts must not race to confirm the same one.
+      const emailTaken = await prisma.user.findFirst({
+        where: { id: { not: id }, OR: [{ email }, { pendingEmail: email }] },
+        select: { id: true },
+      });
       if (emailTaken) {
         return errorResponse(c, `Email '${email}' is already in use by another account.`, 409);
       }
@@ -550,18 +572,22 @@ export const userRoutes = router
       where: { id },
       data: {
         ...(name && { name }),
-        // A new address starts unverified
-        ...(emailChanging && { email, emailVerifiedAt: null }),
-        ...(password && { password: await hashPassword(password) }),
+        // With a mailer, the new address waits in `pendingEmail` until its link is used. Without
+        // account security (basic/none) there is no verification flow, so it is applied directly.
+        ...(emailChanging &&
+          (emailChangeNeedsVerification
+            ? { pendingEmail: email }
+            : { email, pendingEmail: null, emailVerifiedAt: null })),
+        ...(password && { password: await hashPassword(password), pendingEmail: null }),
       },
     });
 
-    // A password change invalidates every other session (keep the caller's own session alive).
-    // A password or email change also deletes every pending emailed token (reset / verification
-    // links sent before it must not survive it). All of it runs in one transaction.
+    // A password change invalidates every other session immediately. An email change only does so
+    // when it is applied (pending changes leave the current address and sessions alone until the
+    // new mailbox confirms), because the current address still controls password recovery.
     let updatedUser: Awaited<typeof updateOp>;
     let revokedSessionsCount = 0;
-    if (password) {
+    if (password || (emailChanging && !emailChangeNeedsVerification)) {
       const [user, , revoked] = await prisma.$transaction([
         updateOp,
         deletePendingAuthTokensOp(id),
@@ -572,28 +598,42 @@ export const userRoutes = router
       updatedUser = user;
       revokedSessionsCount = revoked.count;
     } else if (emailChanging) {
+      // No address change yet: only earlier emailed links are invalidated.
       [updatedUser] = await prisma.$transaction([updateOp, deletePendingAuthTokensOp(id)]);
     } else {
       updatedUser = await updateOp;
     }
 
-    if (emailChanging && features.accountSecurity && env.MAIL_TRANSPORT !== "none") {
-      inBackground(() => sendVerificationEmail(updatedUser));
+    if (email && emailChanging && emailChangeNeedsVerification) {
+      inBackground(() => sendEmailChangeVerification(updatedUser, email));
       inBackground(() =>
-        sendEmailChangedNotice({ name: updatedUser.name, email: existingUser.email }),
+        sendEmailChangeRequestedNotice({ name: updatedUser.name, email: existingUser.email }),
       );
     }
 
     await recordAudit(c, {
       userId: currentUser.userId,
-      action: password ? "PASSWORD_CHANGE" : "UPDATE",
+      action: password
+        ? "PASSWORD_CHANGE"
+        : emailChanging
+          ? emailChangeNeedsVerification
+            ? "EMAIL_CHANGE_REQUESTED"
+            : "EMAIL_CHANGE"
+          : "UPDATE",
       entity: "User",
       entityId: id,
-      details: { updatedFields: Object.keys(changes), revokedSessionsCount },
+      details: {
+        updatedFields: Object.keys(changes),
+        revokedSessionsCount,
+        ...(emailChanging && emailChangeNeedsVerification && { pendingEmail: email }),
+      },
     });
 
     return successResponse(c, updatedUser, {
-      message: "User profile updated successfully.",
+      message:
+        emailChanging && emailChangeNeedsVerification
+          ? "Email change requested. Open the link sent to the new address to confirm it."
+          : "User profile updated successfully.",
     });
   })
   /**

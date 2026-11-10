@@ -45,7 +45,7 @@ const envSchema = z
     // 2 = e.g. Cloudflare + Traefik). Only used when TRUST_PROXY is enabled.
     TRUST_PROXY_HOPS: z.coerce.number().int().min(1).max(10).default(1),
     ADMIN_EMAIL: z.string().email().optional(),
-    ADMIN_PASSWORD: z.string().min(8).max(72).optional(),
+    ADMIN_PASSWORD: z.string().min(12).max(72).optional(),
     // Comma-separated list of allowed CORS origins ("*" allows any origin). When unset it defaults to
     // "*" outside production and to no cross-origin access at all in production.
     CORS_ORIGINS: z
@@ -62,6 +62,13 @@ const envSchema = z
       .string()
       .optional()
       .transform((val) => (val === undefined ? undefined : val === "true" || val === "1")),
+    // Include uptime and database latency in /healthz (defaults to true outside production)
+    HEALTH_DETAILS: z
+      .string()
+      .optional()
+      .transform((val) => (val === undefined ? undefined : val === "true" || val === "1")),
+    // Minimum length for new passwords (existing accounts can still sign in)
+    PASSWORD_MIN_LENGTH: z.coerce.number().int().min(8).max(72).default(12),
     LOGIN_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(10),
     REFRESH_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(30),
     REGISTER_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(5),
@@ -97,8 +104,9 @@ const envSchema = z
     LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).optional(),
     // Seconds during which reusing a just-rotated refresh token is treated as a concurrent refresh
     REFRESH_REUSE_GRACE_SECONDS: z.coerce.number().int().min(0).default(10),
-    // Demo accounts and tasks (admin@example.com / password123) are seeded only when this is
-    // explicitly enabled, so a deployment that forgets NODE_ENV does not get a known admin login.
+    // Demo accounts and tasks (admin@example.com / password1234) are seeded only when this is
+    // explicitly enabled and NODE_ENV is not production. `.env.example` ships it disabled, so a
+    // deployment that copies the file does not get a known admin login.
     SEED_DEMO: z
       .string()
       .optional()
