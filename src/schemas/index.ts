@@ -5,6 +5,7 @@
  */
 
 import { z } from "@hono/zod-openapi";
+import { env } from "../config/env.js";
 
 /** Email normalizado (sin espacios y en minúsculas) para búsquedas y unicidad consistentes. */
 const emailField = (formatMessage: string) =>
@@ -12,6 +13,7 @@ const emailField = (formatMessage: string) =>
     .string()
     .trim()
     .toLowerCase()
+    .max(254, { message: "Email cannot exceed 254 characters" })
     .email({ message: formatMessage })
     .openapi({ example: "ana@example.com" });
 
@@ -21,12 +23,14 @@ const emailField = (formatMessage: string) =>
  */
 const passwordField = z
   .string()
-  .min(8, { message: "Password must be at least 8 characters long" })
+  .min(env.PASSWORD_MIN_LENGTH, {
+    message: `Password must be at least ${env.PASSWORD_MIN_LENGTH} characters long`,
+  })
   .max(72, { message: "Password cannot exceed 72 characters" })
   .refine((value) => Buffer.byteLength(value, "utf8") <= 72, {
     message: "Password cannot exceed 72 bytes (accented characters and emoji take more than one)",
   })
-  .openapi({ example: "password123" });
+  .openapi({ example: "password1234" });
 
 const nameField = z
   .string()
@@ -50,7 +54,7 @@ export const loginSchema = z
       .string()
       .min(1, { message: "Password is required" })
       .max(200)
-      .openapi({ example: "password123" }),
+      .openapi({ example: "password1234" }),
     totpCode: totpCodeField.optional().openapi({
       description: "Código de 6 dígitos de la app autenticadora (solo si la cuenta tiene 2FA)",
     }),
@@ -169,7 +173,7 @@ export const updateUserSchema = z
     currentPassword: z.string().min(1).max(200).optional().openapi({
       description:
         "Contraseña actual. Obligatoria al cambiar la propia contraseña o el propio email; un admin que modifica a otro usuario no la necesita.",
-      example: "password123",
+      example: "password1234",
     }),
   })
   .refine((data) => Object.keys(data).length > 0, {
@@ -205,7 +209,7 @@ export const deleteUserSchema = z
     currentPassword: z.string().min(1).max(200).optional().openapi({
       description:
         "Contraseña actual. Obligatoria al borrar la propia cuenta; un admin que borra a otro usuario no la necesita.",
-      example: "password123",
+      example: "password1234",
     }),
   })
   .openapi("DeleteUserRequest");
@@ -228,13 +232,17 @@ export const updateTaskSchema = z
 const listParams = {
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(10),
-  search: z.string().optional(),
+  search: z.string().max(200).optional(),
   order: z.enum(["asc", "desc"]).default("desc"),
-  sort: z.string().optional().openapi({
+  sort: z.string().max(200).optional().openapi({
     description: "Orden multi-campo, p. ej. `-createdAt,title`",
     example: "-createdAt",
   }),
-  include: z.string().optional().openapi({ description: "Relaciones separadas por comas" }),
+  include: z
+    .string()
+    .max(200)
+    .optional()
+    .openapi({ description: "Relaciones separadas por comas" }),
   includeDeleted: z.enum(["true", "false"]).optional(),
 };
 
@@ -266,7 +274,10 @@ export const userQuerySchema = z.object({
 
 /** Parámetro de ruta `:id` */
 export const idParamSchema = z.object({
-  id: z.string().openapi({ param: { name: "id", in: "path" }, example: "user-1" }),
+  id: z
+    .string()
+    .max(100)
+    .openapi({ param: { name: "id", in: "path" }, example: "user-1" }),
 });
 
 /** Query de `GET /sessions/me`: paginación de las sesiones del propio usuario */
@@ -277,7 +288,10 @@ export const sessionListQuerySchema = z.object({
 
 /** Parámetro de ruta `:sessionId` */
 export const sessionIdParamSchema = z.object({
-  sessionId: z.string().openapi({ param: { name: "sessionId", in: "path" } }),
+  sessionId: z
+    .string()
+    .max(100)
+    .openapi({ param: { name: "sessionId", in: "path" } }),
 });
 
 /** Opción `?permanent=true` para borrados físicos */
@@ -287,7 +301,11 @@ export const permanentQuerySchema = z.object({
 
 /** Query de `GET /tasks/:id` y `GET /users/:id` */
 export const detailQuerySchema = z.object({
-  include: z.string().optional().openapi({ description: "Relaciones separadas por comas" }),
+  include: z
+    .string()
+    .max(200)
+    .optional()
+    .openapi({ description: "Relaciones separadas por comas" }),
   includeDeleted: z.enum(["true", "false"]).optional(),
 });
 
@@ -295,7 +313,7 @@ export const detailQuerySchema = z.object({
 export const auditQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
-  entity: z.string().optional().openapi({ example: "Task" }),
-  action: z.string().optional().openapi({ example: "SOFT_DELETE" }),
-  userId: z.string().optional(),
+  entity: z.string().max(100).optional().openapi({ example: "Task" }),
+  action: z.string().max(100).optional().openapi({ example: "SOFT_DELETE" }),
+  userId: z.string().max(100).optional(),
 });

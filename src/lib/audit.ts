@@ -24,7 +24,9 @@ export async function recordAudit(c: Context, options: LogAuditOptions): Promise
   try {
     const ipAddress = getClientIp(c) ?? null;
 
-    const userAgent = c.req.header("user-agent") || null;
+    // Bound what a client can store: headers are arbitrarily long and this row is kept for
+    // AUDIT_RETENTION_DAYS.
+    const userAgent = c.req.header("user-agent")?.slice(0, 512) || null;
     const details =
       typeof options.details === "object"
         ? JSON.stringify(options.details)

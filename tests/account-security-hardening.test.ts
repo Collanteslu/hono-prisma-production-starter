@@ -155,6 +155,22 @@ describe("MFA hardening", () => {
     ).rejects.toThrow();
   });
 
+  it("returns 503, not 500, when a stored secret cannot be decrypted", async () => {
+    const { user } = await startSetup();
+    await prisma.user.update({
+      where: { id: user.user.id },
+      data: { totpSecret: "v1.broken.broken.broken", totpEnabledAt: new Date() },
+    });
+
+    const res = await post("/api/auth/login", {
+      email: user.email,
+      password: user.password,
+      totpCode: "123456",
+    });
+    expect(res.status).toBe(503);
+    expect((await res.json()).details?.code).toBe("MFA_UNAVAILABLE");
+  });
+
   it("an admin cannot strip their own 2FA through the admin endpoint", async () => {
     const { user, secret } = await startSetup();
     expect(

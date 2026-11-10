@@ -97,6 +97,11 @@ export const userSchema = z
     id: z.string(),
     name: z.string(),
     email: z.string(),
+    pendingEmail: z
+      .string()
+      .nullable()
+      .optional()
+      .openapi({ description: "Nueva dirección pendiente de confirmar (null si no hay cambio)" }),
     role: roleSchema,
     isBlocked: z.boolean(),
     blockedReason: z.string().nullable(),

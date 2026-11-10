@@ -11,7 +11,7 @@ export function bearer(token: string, extra: Record<string, string> = {}) {
 
 export async function login(
   email: string,
-  password = "password123",
+  password = "password1234",
   extra: Record<string, string> = {},
 ) {
   const res = await app.request("/api/auth/login", {
@@ -31,7 +31,7 @@ export async function login(
 export const loginAdmin = () => login("admin@example.com");
 
 /** Registers a fresh standard user (unique email) and returns its credentials and first session */
-export async function createTestUser(password = "password123") {
+export async function createTestUser(password = "password1234") {
   const email = `user-${randomUUID()}@example.com`;
   const res = await app.request("/api/auth/register", {
     method: "POST",

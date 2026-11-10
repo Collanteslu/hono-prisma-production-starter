@@ -211,7 +211,7 @@ describe("Email verification", () => {
   it("sends a link on registration, verifies once, and stops resending when verified", async () => {
     const email = `verify-${randomUUID()}@example.com`;
     const before = outbox.length;
-    await post("/api/auth/register", { name: "Verify Me", email, password: "password123" });
+    await post("/api/auth/register", { name: "Verify Me", email, password: "password1234" });
     const token = await tokenEmailedTo(email, before);
 
     const stored = await prisma.user.findUniqueOrThrow({ where: { email } });
@@ -229,7 +229,7 @@ describe("Email verification", () => {
     expect(outbox.slice(mark)).toHaveLength(0);
   });
 
-  it("changing your email needs the current password and re-opens verification", async () => {
+  it("changing your email needs the current password and waits for the new mailbox", async () => {
     const user = await createTestUser();
     await prisma.user.update({
       where: { id: user.user.id },
@@ -248,9 +248,11 @@ describe("Email verification", () => {
 
     const before = outbox.length;
     expect((await put({ email: newEmail, currentPassword: user.password })).status).toBe(200);
-    expect(
-      (await prisma.user.findUniqueOrThrow({ where: { id: user.user.id } })).emailVerifiedAt,
-    ).toBeNull();
+    const pending = await prisma.user.findUniqueOrThrow({ where: { id: user.user.id } });
+    expect(pending.email).toBe(user.email);
+    expect(pending.pendingEmail).toBe(newEmail);
+    // The current address keeps its verification and remains the recovery address until confirmed
+    expect(pending.emailVerifiedAt).not.toBeNull();
     await tokenEmailedTo(newEmail, before);
 
     // Changing the name needs nothing extra
@@ -276,7 +278,7 @@ describe("Two-factor authentication", () => {
   }
 
   const loginWith = (email: string, extra: Record<string, string> = {}) =>
-    post("/api/auth/login", { email, password: "password123", ...extra });
+    post("/api/auth/login", { email, password: "password1234", ...extra });
 
   it("requires the password to start, the first code to confirm, and revokes other devices", async () => {
     const user = await createTestUser();
@@ -507,7 +509,7 @@ describe("Messages are in English", () => {
     });
     expect(res.status).toBe(400);
     const text = JSON.stringify((await res.json()).errors);
-    expect(text).toContain("Password must be at least 8 characters long");
+    expect(text).toContain("Password must be at least 12 characters long");
     expect(text).toContain("Invalid email format");
     expect(text).not.toMatch(/contraseña|debe tener/i);
   });
@@ -521,7 +523,7 @@ describe("Emailed tokens after an email or password change", () => {
       body: JSON.stringify(body),
     });
 
-  it("a reset link sent to the old address stops working once the email changes", async () => {
+  it("a reset link sent to the old address stops working once the email is confirmed", async () => {
     const user = await createTestUser();
     const before = outbox.length;
     await post("/api/auth/forgot-password", { email: user.email });
@@ -532,13 +534,16 @@ describe("Emailed tokens after an email or password change", () => {
     expect((await putUser(user, { email: newEmail, currentPassword: user.password })).status).toBe(
       200,
     );
-    await tokenEmailedTo(newEmail, mark);
+    const newToken = await tokenEmailedTo(newEmail, mark);
+    expect((await post("/api/auth/verify-email", { token: newToken })).status).toBe(200);
+
+    const stored = await prisma.user.findUniqueOrThrow({ where: { id: user.user.id } });
+    expect(stored.email).toBe(newEmail);
+    expect(stored.pendingEmail).toBeNull();
+    expect(stored.emailVerifiedAt).not.toBeNull();
 
     const reset = await post("/api/auth/reset-password", { token, password: "brand-new-pass-1" });
     expect(reset.status).toBe(400);
-    const stored = await prisma.user.findUniqueOrThrow({ where: { id: user.user.id } });
-    // The new, never confirmed address must not end up verified, and the password is unchanged
-    expect(stored.emailVerifiedAt).toBeNull();
     await expect(login(newEmail, user.password)).resolves.toBeDefined();
   });
 
@@ -559,11 +564,12 @@ describe("Emailed tokens after an email or password change", () => {
       (await prisma.user.findUniqueOrThrow({ where: { id: user.user.id } })).emailVerifiedAt,
     ).toBeNull();
 
-    // The link sent to the new address does work
+    // The link sent to the new address does work and applies the change
     expect((await post("/api/auth/verify-email", { token: newToken })).status).toBe(200);
-    expect(
-      (await prisma.user.findUniqueOrThrow({ where: { id: user.user.id } })).emailVerifiedAt,
-    ).not.toBeNull();
+    const stored = await prisma.user.findUniqueOrThrow({ where: { id: user.user.id } });
+    expect(stored.email).toBe(newEmail);
+    expect(stored.pendingEmail).toBeNull();
+    expect(stored.emailVerifiedAt).not.toBeNull();
   });
 
   it("changing the password deletes every pending reset and verification link", async () => {

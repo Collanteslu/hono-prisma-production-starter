@@ -28,7 +28,7 @@ const send = (method: string, path: string, body?: unknown, token?: string) =>
   });
 const settle = () => new Promise((resolve) => setTimeout(resolve, 150));
 
-async function loginAs(email: string, password = "password123") {
+async function loginAs(email: string, password = "password1234") {
   const res = await send("POST", "/api/auth/login", { email, password });
   expect(res.status).toBe(200);
   return (await res.json()) as { accessToken: string; user: { id: string } };
@@ -40,7 +40,7 @@ describe("AUTH_MODE=basic", () => {
     const register = await send("POST", "/api/auth/register", {
       name: "Basic User",
       email,
-      password: "password123",
+      password: "password1234",
     });
     expect(register.status).toBe(201);
     const { accessToken } = await loginAs(email);
@@ -74,11 +74,11 @@ describe("AUTH_MODE=basic", () => {
     await send("POST", "/api/auth/register", {
       name: "Enrolled User",
       email,
-      password: "password123",
+      password: "password1234",
     });
     // Downgrading the mode must not silently drop an existing 2FA protection
     await prisma.user.update({ where: { email }, data: { totpEnabledAt: new Date() } });
-    const res = await send("POST", "/api/auth/login", { email, password: "password123" });
+    const res = await send("POST", "/api/auth/login", { email, password: "password1234" });
     expect(res.status).toBe(401);
     expect(((await res.json()) as { details?: { code?: string } }).details?.code).toBe(
       "MFA_REQUIRED",
@@ -91,14 +91,14 @@ describe("AUTH_MODE=basic", () => {
     await send("POST", "/api/auth/register", {
       name: "Quiet User",
       email,
-      password: "password123",
+      password: "password1234",
     });
     const { accessToken, user } = await loginAs(email);
     const moved = `moved-${randomUUID()}@example.com`;
     const put = await send(
       "PUT",
       `/api/users/${user.id}`,
-      { email: moved, currentPassword: "password123" },
+      { email: moved, currentPassword: "password1234" },
       accessToken,
     );
     expect(put.status).toBe(200);

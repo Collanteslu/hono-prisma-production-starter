@@ -88,6 +88,7 @@ const enableRoute = createRoute({
       ...authErrors,
       403: "Cuenta suspendida",
       409: "No hay un alta pendiente o ya está activo",
+      503: "El secreto 2FA no se puede descifrar temporalmente",
     }),
   },
 });
@@ -107,6 +108,7 @@ const disableRoute = createRoute({
       ...authErrors,
       403: "Contraseña o código incorrectos, o cuenta suspendida",
       409: "El 2FA no está activo",
+      503: "El secreto 2FA no se puede descifrar temporalmente",
     }),
   },
 });
@@ -165,7 +167,17 @@ export const mfaRoutes = router
     if (user.totpEnabledAt || !user.totpSecret) {
       return errorResponse(c, "There is no pending two-factor setup. Call /mfa/setup first.", 409);
     }
-    const step = verifyTotp(decryptSecret(user.totpSecret), code, null);
+    let step: number | null;
+    try {
+      step = verifyTotp(decryptSecret(user.totpSecret), code, null);
+    } catch {
+      return errorResponse(
+        c,
+        "Two-factor authentication is temporarily unavailable. Please contact support.",
+        503,
+        { code: "MFA_UNAVAILABLE" },
+      );
+    }
     if (step === null) return errorResponse(c, "Invalid two-factor code.", 400);
 
     const recoveryCodes = generateRecoveryCodes();
@@ -234,7 +246,16 @@ export const mfaRoutes = router
     // A wrong code counts towards the same lockout as a wrong password, and only a fully valid
     // confirmation clears the counter (clearing it before the code check would let a correct
     // password reset the count on every attempt)
-    if (!(await verifySecondFactor(user, { code, recoveryCode }))) {
+    const factor = await verifySecondFactor(user, { code, recoveryCode });
+    if (factor === "unreadable") {
+      return errorResponse(
+        c,
+        "Two-factor authentication is temporarily unavailable. Please contact support.",
+        503,
+        { code: "MFA_UNAVAILABLE" },
+      );
+    }
+    if (factor !== "ok") {
       await passwordConfirmLockout.recordFailure(lockoutKey);
       return errorResponse(c, "Current password or code is incorrect.", 403);
     }

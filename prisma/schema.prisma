@@ -11,6 +11,8 @@ model User {
   id            String    @id @default(uuid())
   name          String
   email         String    @unique
+  // Requested address: it replaces `email` only after the link sent to it is used
+  pendingEmail  String?
   password      String
   role          String    @default("user") // "admin" | "user"
   isBlocked     Boolean   @default(false)
@@ -37,8 +39,8 @@ model User {
 model AuthToken {
   id        String    @id @default(uuid())
   userId    String
-  type      String // "password_reset" | "email_verify"
-  email     String // address the token was emailed to: it only works while it is still the account's email
+  type      String // "password_reset" | "email_verify" | "email_change"
+  email     String // address the token was emailed to: it only works while it matches the account's current or pending email
   tokenHash String    @unique
   expiresAt DateTime
   usedAt    DateTime?

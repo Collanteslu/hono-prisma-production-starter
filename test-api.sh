@@ -16,13 +16,13 @@ echo "🧪 2. LOGIN ADMIN Y LOGIN USUARIO (ANA)"
 echo "=========================================================="
 ADMIN_LOGIN=$(curl -s -X POST "$BASE_URL/api/auth/login" \
   -H "Content-Type: application/json" \
-  -d '{"email":"admin@example.com","password":"password123"}')
+  -d '{"email":"admin@example.com","password":"password1234"}')
 ADMIN_TOKEN=$(echo "$ADMIN_LOGIN" | grep -o '"accessToken":"[^"]*' | cut -d'"' -f4)
 
 USER_LOGIN=$(curl -s -X POST "$BASE_URL/api/auth/login" \
   -H "Content-Type: application/json" \
   -H "User-Agent: Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)" \
-  -d '{"email":"ana@example.com","password":"password123"}')
+  -d '{"email":"ana@example.com","password":"password1234"}')
 USER_TOKEN=$(echo "$USER_LOGIN" | grep -o '"accessToken":"[^"]*' | cut -d'"' -f4)
 USER_SESSION_ID=$(echo "$USER_LOGIN" | grep -o '"sessionId":"[^"]*' | cut -d'"' -f4)
 
@@ -59,7 +59,7 @@ echo "=========================================================="
 # Ana inicia sesión nuevamente
 ANA_NEW_LOGIN=$(curl -s -X POST "$BASE_URL/api/auth/login" \
   -H "Content-Type: application/json" \
-  -d '{"email":"ana@example.com","password":"password123"}')
+  -d '{"email":"ana@example.com","password":"password1234"}')
 ANA_NEW_TOKEN=$(echo "$ANA_NEW_LOGIN" | grep -o '"accessToken":"[^"]*' | cut -d'"' -f4)
 
 echo "Admin bloquea la cuenta de Ana (user-2) por motivo de seguridad:"
@@ -79,7 +79,7 @@ echo "✔ Correcto: Ana quedó bloqueada en tiempo real (HTTP 403)"
 echo -e "\nIntentando hacer login con cuenta bloqueada:"
 BLOCKED_LOGIN=$(curl -s -X POST "$BASE_URL/api/auth/login" \
   -H "Content-Type: application/json" \
-  -d '{"email":"ana@example.com","password":"password123"}')
+  -d '{"email":"ana@example.com","password":"password1234"}')
 echo "$BLOCKED_LOGIN"
 echo "$BLOCKED_LOGIN" | grep -qi "suspended"
 echo "✔ Correcto: Login rechazado para cuenta bloqueada"
@@ -96,7 +96,7 @@ echo "$UNBLOCK_RES"
 echo -e "\nLogin de Ana tras ser desbloqueada:"
 ANA_UNBLOCKED_LOGIN=$(curl -s -X POST "$BASE_URL/api/auth/login" \
   -H "Content-Type: application/json" \
-  -d '{"email":"ana@example.com","password":"password123"}')
+  -d '{"email":"ana@example.com","password":"password1234"}')
 echo "$ANA_UNBLOCKED_LOGIN" | grep -qi "successful"
 echo "✔ Correcto: Ana vuelve a acceder con normalidad tras ser desbloqueada"
 

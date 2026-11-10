@@ -156,7 +156,7 @@ The API will be running on:
 http://localhost:3011
 ```
 
-*(With `SEED_DEMO=true` (the `.env.example` default for development), an empty database is seeded on first startup with demo accounts and tasks — see [Pre-seeded Demo Credentials](#pre-seeded-demo-credentials). With `AUTH_MODE=none` it seeds two public tasks instead. Without `SEED_DEMO`, or in production (where it is refused), nothing is seeded; bootstrap the first admin with `ADMIN_EMAIL` / `ADMIN_PASSWORD`.)*
+*(With `SEED_DEMO=true` (opt-in in your local `.env`; `.env.example` ships it disabled), an empty database is seeded on first startup with demo accounts and tasks — see [Pre-seeded Demo Credentials](#pre-seeded-demo-credentials). With `AUTH_MODE=none` it seeds two public tasks instead. Without `SEED_DEMO`, or in production (where it is refused), nothing is seeded; bootstrap the first admin with `ADMIN_EMAIL` / `ADMIN_PASSWORD`.)*
 
 ### Database migrations
 
@@ -325,18 +325,19 @@ sequenceDiagram
 - **Refresh token rotation with reuse detection**: each refresh token can be exchanged exactly once (atomic claim). Replaying a rotated token within `REFRESH_REUSE_GRACE_SECONDS` (default 10s) returns `409` (benign concurrent refresh); after that it is treated as theft and the whole session is revoked.
 - **Hashed refresh tokens**: only SHA-256 digests are persisted, so a database leak does not expose usable tokens.
 - **Real-time authorization**: blocking, soft-deleting, role changes and session revocation take effect on the very next request (role is read from the database, not from the JWT).
+- **HTTP hardening**: every `/api/*` response is marked `Cache-Control: no-store` with `Vary: Authorization`, so browsers and shared proxies never retain tokens or personal data. The API sends a strict `Content-Security-Policy` (`default-src 'none'`); `/docs` gets its own policy allowing the Scalar bundle from jsDelivr plus its inline bootstrap.
 - **Brute-force protection**: per-IP rate limits on `/login`, `/refresh` and `/register`, plus a per-account lockout after 5 failed logins (15 min). Counters are stored in the database (`RateLimitBucket`), so limits hold across every instance sharing it (e.g. Turso) and survive restarts; a broken counter store fails open and is logged. The lockout is keyed by email, so someone can deliberately lock a known address (`LOGIN_LOCKOUT_MAX_FAILURES` / `LOGIN_LOCKOUT_MINUTES` tune it); this is the usual trade-off against credential stuffing.
 - **Trusted client IP**: `X-Forwarded-For` is only honoured when `TRUST_PROXY=true`, and it is read **from the right** (`TRUST_PROXY_HOPS` trusted proxies, default 1) because the leftmost entries are client-controlled. `CF-Connecting-IP` and `X-Real-IP` are ignored, since clients can set them and many proxies forward them untouched. Used for sessions, the audit log and rate limiting.
-- **Password policy**: 8–72 characters and at most 72 UTF-8 bytes (bcrypt cost 12). Changing your own password requires `currentPassword`; the update and the revocation of every other session run in one transaction. Admins can reset another user's password without it. Deleting your own account also requires `currentPassword`, admins included.
+- **Password policy**: at least 12 characters (configurable with `PASSWORD_MIN_LENGTH`, minimum 8), at most 72, and at most 72 UTF-8 bytes (bcrypt cost 12). Existing accounts can still sign in after the policy is raised. Changing your own password requires `currentPassword`; the update and the revocation of every other session run in one transaction. Admins can reset another user's password without it. Deleting your own account also requires `currentPassword`, admins included.
 - **Absolute sessions**: a session lasts 7 days from login; rotated refresh tokens are capped to that expiry, so users must log in again after day 7.
 - **Startup guards**: the app refuses to boot without `JWT_SECRET` / `JWT_REFRESH_SECRET` (unless `AUTH_MODE=none`, where nothing is signed), and in production requires both to be at least 32 characters and different from each other. Inconsistent settings (see [Authentication Modes](#-authentication-modes-auth_mode)) also stop the boot. `.env.example` ships with blank secrets on purpose.
 - **Admin safety**: the last active administrator cannot delete their account; deleted accounts cannot be reactivated.
 - **Password recovery** *(`AUTH_MODE=full`)*: `POST /api/auth/forgot-password` always answers 202 (exists or not) and sends the email in the background, so neither the body nor the latency reveals which addresses are registered; at most 3 emails per address per hour. The emailed token is single-use, stored only as SHA-256 and expires after `PASSWORD_RESET_TTL_MINUTES`. Resetting revokes every session, lifts the login lockout and keeps 2FA enforced.
-- **Email verification** *(`AUTH_MODE=full`)*: registration (and any email change) sends a single-use link. Set `REQUIRE_EMAIL_VERIFICATION=true` to forbid login until it is used (needs `MAIL_TRANSPORT=smtp`). Existing accounts are grandfathered as verified by the migration. Changing your own email or password needs `currentPassword`, so a stolen access token cannot redirect password resets to an attacker's mailbox. Emailed links are bound to the address they were sent to, and changing the email or the password (including via reset) deletes every pending link, so a link sent to a previous address never works.
+- **Email verification** *(`AUTH_MODE=full`)*: registration (and any email change) sends a single-use link. Set `REQUIRE_EMAIL_VERIFICATION=true` to forbid login until it is used (needs `MAIL_TRANSPORT=smtp`). Existing accounts are grandfathered as verified by the migration. Changing your own email or password needs `currentPassword`, so a stolen access token cannot redirect password resets to an attacker's mailbox. A new email stays in `pendingEmail` until the link sent to that mailbox is used; the current address keeps working (and remains the recovery address) until then. Confirming the change revokes every session, because the address controls password recovery. Emailed links are bound to the address they were sent to, and changing the email or the password (including via reset) deletes every pending link, so a link sent to a previous address never works.
 - **Two-factor authentication (TOTP, RFC 6238)** *(`AUTH_MODE=full`; enrolled accounts keep needing their code in `basic`)*: `POST /api/auth/mfa/setup` (needs the password) → scan the `otpauth://` URI → `POST /api/auth/mfa/enable` returns 10 one-time recovery codes and signs out other devices. Login then needs `totpCode` or `recoveryCode`. Codes cannot be replayed (the accepted time step is stored atomically), wrong codes count towards the lockout, secrets are AES-256-GCM encrypted at rest (`MFA_ENCRYPTION_KEY`, defaults to a key derived from `JWT_SECRET`) and recovery codes (80 random bits each) are stored hashed. An admin can reset a user who lost their device with `DELETE /api/users/:id/mfa` (not their own: admins use `/mfa/disable` like everyone else).
 - **Non-enumerating registration** *(`AUTH_MODE=full`, with a delivering mailer)*: `POST /api/auth/register` answers `202` with no account data for new and taken addresses alike, takes the same time either way, and emails the owner of a taken address.
 - **No existence oracle**: a task or session that belongs to someone else answers 404, exactly like a missing one.
-- **Audit trail**: logins (successful and failed), logout, registration, user creation, block/unblock, role changes, password changes and resets, MFA enable/disable/reset, email verification, session revocations, token reuse and task changes. Entries older than `AUDIT_RETENTION_DAYS` (default 90, `0` keeps everything) are purged by the cleanup job.
+- **Audit trail**: logins (successful and failed), logout, registration, user creation, block/unblock, role changes, password changes and resets, MFA enable/disable/reset, email verification and email changes, session revocations, token reuse and task changes. Entries older than `AUDIT_RETENTION_DAYS` (default 90, `0` keeps everything) are purged by the cleanup job.
 - **Roles**: `PATCH /api/users/:id/role` promotes or demotes; the system can never be left without an active administrator (delete, suspend and demote are all checked inside a transaction).
 
 ### Pre-seeded Demo Credentials
@@ -345,8 +346,8 @@ Created automatically **only when `SEED_DEMO=true`** (never in production, where
 
 | Role | Name | Email | Password | Permissions |
 |---|---|---|---|---|
-| **Admin** | Luis Admin | `admin@example.com` | `password123` | Full access, user management, account suspension, session revocation |
-| **User** | Ana García | `ana@example.com` | `password123` | Standard access, owns personal tasks and sessions |
+| **Admin** | Luis Admin | `admin@example.com` | `password1234` | Full access, user management, account suspension, session revocation |
+| **User** | Ana García | `ana@example.com` | `password1234` | Standard access, owns personal tasks and sessions |
 
 ---
 
@@ -503,7 +504,7 @@ The tables describe the default `AUTH_MODE=full`. With `basic`, the recovery, ve
 | `GET` | `/api/users` | Paginated users list (`?page=1&limit=10&search=ana&role=user&include=tasks,sessions&includeDeleted=true&sort=-createdAt,name&filter[role]=user`) | Admin |
 | `GET` | `/api/users/:id` | Get user details (`?include=tasks,sessions`); Admin, or the user themselves | Bearer |
 | `POST` | `/api/users` | Create user with any role (public sign-up lives at `/api/auth/register`). With `AUTH_MODE=full` and a delivering mailer, the new account gets its verification link | Admin |
-| `PUT` | `/api/users/:id` | Update own user profile (or any profile if Admin). Changing your own password or email needs `currentPassword`; a password change revokes other sessions | Bearer |
+| `PUT` | `/api/users/:id` | Update own user profile (or any profile if Admin). Changing your own password or email needs `currentPassword`; a password change revokes other sessions, and an email change stays pending until confirmed from the new mailbox (then every session is revoked) | Bearer |
 | `DELETE` | `/api/users/:id/mfa` | *Admin only*: remove a user's 2FA (lost device) and revoke their sessions | Admin |
 | `PATCH` | `/api/users/:id/role` | **Promote / demote** *(Admin only)*: cannot change your own role or demote the last active admin | Admin |
 | `PATCH` | `/api/users/:id/block` | **Suspend / Reactivate User** *(Admin only)*: Immediately revokes all active sessions | Admin |
@@ -594,6 +595,8 @@ All settings are environment variables, validated at startup (the process exits 
 | `JWT_SECRET` / `JWT_REFRESH_SECRET` | — (**required unless `AUTH_MODE=none`**) | HS256 signing secrets, at least 16 characters. **In production: at least 32 characters and different from each other.** Generate with `openssl rand -base64 48` |
 | `NODE_ENV` | `development` | `development`, `production` or `test`. Production disables the docs by default and refuses `SEED_DEMO` |
 | `SEED_DEMO` | `false` | Seeds the demo accounts and tasks into an empty database. Development only: the app refuses to start with it in production |
+| `PASSWORD_MIN_LENGTH` | `12` | Minimum length for new passwords (8–72). Existing accounts are not locked out when it is raised |
+| `HEALTH_DETAILS` | `false` in production, `true` elsewhere | Include uptime and SQLite latency in the public `/healthz` response |
 | `PORT` | `3011` | HTTP port |
 | `DATABASE_URL` | `file:./dev.db` (`file:/app/data/prod.db` in the Docker image) | Local SQLite file (relative paths resolve from the working directory) |
 | `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` | — | Use a remote Turso/libSQL database instead of the local file |
@@ -612,7 +615,7 @@ All settings are environment variables, validated at startup (the process exits 
 | `LOGIN_LOCKOUT_MAX_FAILURES` / `LOGIN_LOCKOUT_MINUTES` | `5` / `15` | Failed passwords before an account is locked, and for how long |
 | `AUDIT_RETENTION_DAYS` | `90` | Days to keep audit entries (`0` = forever) |
 | `REFRESH_REUSE_GRACE_SECONDS` | `10` | Window in which reusing a just-rotated refresh token is treated as a concurrent refresh instead of theft |
-| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | — | Bootstrap the first admin in production on an empty database (password 8–72 chars). Rejected with `AUTH_MODE=none` |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | — | Bootstrap the first admin in production on an empty database (password 12–72 chars). Rejected with `AUTH_MODE=none` |
 | `LOG_LEVEL` | `info` in production, `debug` otherwise | Pino log level (`trace` … `fatal`, `silent`) |
 
 An empty value (`VAR=`) is treated as unset, which is what lets Docker Compose forward optional variables without overriding defaults.

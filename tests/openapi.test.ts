@@ -73,7 +73,7 @@ describe("Responses satisfy the documented schemas", () => {
     const register = await app.request("/api/auth/register", {
       method: "POST",
       headers: jsonHeaders,
-      body: JSON.stringify({ name: "Contract", email, password: "password123" }),
+      body: JSON.stringify({ name: "Contract", email, password: "password1234" }),
     });
     // Full mode with a live mailer: 202 with no account data (the same for every address)
     expect(register.status).toBe(202);
@@ -82,7 +82,7 @@ describe("Responses satisfy the documented schemas", () => {
     const login = await app.request("/api/auth/login", {
       method: "POST",
       headers: jsonHeaders,
-      body: JSON.stringify({ email, password: "password123" }),
+      body: JSON.stringify({ email, password: "password1234" }),
     });
     const loginBody = await login.json();
     expectMatches(loginResponseSchema, loginBody);

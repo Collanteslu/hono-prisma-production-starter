@@ -29,6 +29,11 @@ if (features.accountSecurity && !env.MFA_ENCRYPTION_KEY) {
     "MFA_ENCRYPTION_KEY is unset, so TOTP secrets are encrypted with a key derived from JWT_SECRET: rotating JWT_SECRET makes every enrolled authenticator undecryptable and its 2FA login fails. Set a dedicated, stable MFA_ENCRYPTION_KEY.",
   );
 }
+if (env.NODE_ENV === "development") {
+  appLogger.warn(
+    "NODE_ENV=development: docs and wildcard CORS (unless CORS_ORIGINS is set) are enabled, and internal error messages are verbose. Set NODE_ENV=production before exposing this process to the internet.",
+  );
+}
 if (env.NODE_ENV === "production" && !env.TRUST_PROXY) {
   appLogger.warn(
     "TRUST_PROXY is off: every client is identified by its socket address. Behind a reverse proxy (Traefik, Nginx, Cloudflare) all users then share the proxy's IP, so the login, registration and recovery rate limits apply to the whole service. Set TRUST_PROXY=true and TRUST_PROXY_HOPS to the number of proxies in front of the API.",

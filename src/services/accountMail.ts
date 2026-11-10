@@ -36,6 +36,42 @@ export async function sendVerificationEmail(user: Recipient): Promise<void> {
 }
 
 /**
+ * Asks the new address to prove control before it replaces the account email. The token is bound to
+ * `pendingEmail`, so a later request for a different address invalidates it.
+ */
+export async function sendEmailChangeVerification(
+  user: Recipient,
+  pendingEmail: string,
+): Promise<void> {
+  const token = await createAuthToken(
+    user,
+    "email_change",
+    env.EMAIL_VERIFY_TTL_HOURS * 60 * minutes(1),
+    pendingEmail,
+  );
+  await sendMail({
+    to: pendingEmail,
+    subject: "Confirm your new email address",
+    text: `Hi ${user.name},\n\nConfirm this address as the new email for your account by opening:\n${env.APP_URL}/verify-email?token=${token}\n\nThe link is valid for ${env.EMAIL_VERIFY_TTL_HOURS} hours. If you did not request this change, ignore this message: your account keeps its current address.`,
+  });
+}
+
+/**
+ * Tells the current address that a change was requested. It carries no token, so a compromised
+ * mailbox cannot complete the change from here; it only gives the real owner a chance to react.
+ */
+export async function sendEmailChangeRequestedNotice(recipient: {
+  name: string;
+  email: string;
+}): Promise<void> {
+  await sendMail({
+    to: recipient.email,
+    subject: "A change of email was requested",
+    text: `Hi ${recipient.name},\n\nSomeone requested to change the email address on your account. The change will only happen after the new address is confirmed. If it was not you, change your password right away, or ask support to lock the account.`,
+  });
+}
+
+/**
  * Tells the address the account had BEFORE a change that the email moved. It carries no token, so an
  * abandoned or bounced mailbox cannot lock anyone out. Without it, an attacker who changes the email
  * keeps the real owner completely in the dark.

@@ -26,6 +26,8 @@ import {
 import { successSchema } from "../schemas/responses.js";
 import {
   inBackground,
+  sendEmailChangedNotice,
+  sendEmailChangeVerification,
   sendPasswordResetEmail,
   sendVerificationEmail,
 } from "../services/accountMail.js";
@@ -105,7 +107,11 @@ const verifyRoute = createRoute({
   request: jsonBody(verifyEmailSchema),
   responses: {
     200: jsonResponse(successSchema(z.null()), "Email verificado"),
-    ...errorResponses({ 400: "Token inválido, caducado o ya usado", 429: "Rate limit excedido" }),
+    ...errorResponses({
+      400: "Token inválido, caducado o ya usado",
+      409: "La nueva dirección ya está ocupada por otra cuenta",
+      429: "Rate limit excedido",
+    }),
   },
 });
 
@@ -114,7 +120,8 @@ const resendRoute = createRoute({
   path: "/resend-verification",
   tags: ["Auth"],
   summary: "Reenviar el email de verificación",
-  description: "Respuesta 202 siempre. Máximo 3 correos por dirección y hora.",
+  description:
+    "Respuesta 202 siempre. Si hay un cambio de email pendiente, reenvía el enlace a la nueva dirección. Máximo 3 correos por dirección y hora.",
   request: jsonBody(resendVerificationSchema),
   responses: {
     202: accepted,
@@ -147,8 +154,8 @@ export const recoveryRoutes = router
   .openapi(resetRoute, async (c) => {
     const { token, password } = c.req.valid("json");
 
-    const userId = await consumeAuthToken(token, "password_reset");
-    const user = userId ? await prisma.user.findUnique({ where: { id: userId } }) : null;
+    const consumed = await consumeAuthToken(token, "password_reset");
+    const user = consumed ? await prisma.user.findUnique({ where: { id: consumed.userId } }) : null;
     if (!user || user.deletedAt || user.isBlocked) {
       return errorResponse(c, "Invalid or expired reset token.", 400);
     }
@@ -161,6 +168,8 @@ export const recoveryRoutes = router
           password: await hashPassword(password),
           // Whoever received the email controls the mailbox (the token is bound to this address)
           emailVerifiedAt: user.emailVerifiedAt ?? new Date(),
+          // A pending email change is cancelled by a password reset
+          pendingEmail: null,
         },
       }),
       deletePendingAuthTokensOp(user.id),
@@ -182,22 +191,107 @@ export const recoveryRoutes = router
   .openapi(verifyRoute, async (c) => {
     const { token } = c.req.valid("json");
 
-    const userId = await consumeAuthToken(token, "email_verify");
-    if (!userId) return errorResponse(c, "Invalid or expired verification token.", 400);
+    // The endpoint serves both flows: verifying the current address and confirming a pending one.
+    const consumed =
+      (await consumeAuthToken(token, "email_verify")) ??
+      (await consumeAuthToken(token, "email_change"));
+    if (!consumed) return errorResponse(c, "Invalid or expired verification token.", 400);
 
-    await prisma.user.updateMany({
-      where: { id: userId, emailVerifiedAt: null },
-      data: { emailVerifiedAt: new Date() },
+    if (consumed.type === "email_verify") {
+      await prisma.user.updateMany({
+        where: { id: consumed.userId, emailVerifiedAt: null },
+        data: { emailVerifiedAt: new Date() },
+      });
+      await recordAudit(c, {
+        userId: consumed.userId,
+        action: "EMAIL_VERIFIED",
+        entity: "User",
+        entityId: consumed.userId,
+      });
+      return successResponse(c, null, { message: "Email verified." });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: consumed.userId },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        pendingEmail: true,
+        isBlocked: true,
+        deletedAt: true,
+      },
     });
-    await recordAudit(c, { userId, action: "EMAIL_VERIFIED", entity: "User", entityId: userId });
-    return successResponse(c, null, { message: "Email verified." });
+    if (
+      !user ||
+      user.isBlocked ||
+      user.deletedAt ||
+      user.pendingEmail !== consumed.email ||
+      user.email === consumed.email
+    ) {
+      return errorResponse(c, "Invalid or expired verification token.", 400);
+    }
+
+    // The address may have been taken after the request; do not overwrite another account.
+    const taken = await prisma.user.findFirst({
+      where: { email: consumed.email, id: { not: user.id } },
+      select: { id: true },
+    });
+    if (taken) {
+      await prisma.user.update({ where: { id: user.id }, data: { pendingEmail: null } });
+      return errorResponse(c, "That email address is already in use by another account.", 409);
+    }
+
+    const oldEmail = user.email;
+    await prisma.$transaction([
+      prisma.user.update({
+        where: { id: user.id },
+        data: {
+          email: consumed.email,
+          pendingEmail: null,
+          // The link proves control of the new mailbox
+          emailVerifiedAt: new Date(),
+        },
+      }),
+      deletePendingAuthTokensOp(user.id),
+      // The address controls password recovery: every device must sign in again with it.
+      ...userSessionRevocationOps(user.id),
+    ]);
+
+    inBackground(() => sendEmailChangedNotice({ name: user.name, email: oldEmail }));
+    await recordAudit(c, {
+      userId: user.id,
+      action: "EMAIL_CHANGED",
+      entity: "User",
+      entityId: user.id,
+      details: { previousEmail: oldEmail, email: consumed.email },
+    });
+    return successResponse(c, null, {
+      message: "Email changed. Please sign in again with the new address.",
+    });
   })
   .openapi(resendRoute, async (c) => {
     const { email } = c.req.valid("json");
 
     inBackground(async () => {
       const user = await prisma.user.findUnique({ where: { email } });
-      if (!user || user.deletedAt || user.isBlocked || user.emailVerifiedAt) return;
+      if (!user || user.deletedAt || user.isBlocked) return;
+
+      // A pending email change has its own link and target address; resend that one instead of
+      // sending a current-address verification that would leave the change stuck.
+      if (user.pendingEmail) {
+        if (!(await mayEmail("change", user.pendingEmail))) return;
+        await sendEmailChangeVerification(user, user.pendingEmail);
+        await recordAudit(c, {
+          userId: user.id,
+          action: "EMAIL_CHANGE_VERIFICATION_RESENT",
+          entity: "User",
+          entityId: user.id,
+        });
+        return;
+      }
+
+      if (user.emailVerifiedAt) return;
       if (!(await mayEmail("verify", email))) return;
       await sendVerificationEmail(user);
       await recordAudit(c, {

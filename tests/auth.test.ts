@@ -14,7 +14,7 @@ describe("Authentication & Session API", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         email: "admin@example.com",
-        password: "password123",
+        password: "password1234",
       }),
     });
 
@@ -141,7 +141,7 @@ describe("Authentication & Session API", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         email: "ana@example.com",
-        password: "password123",
+        password: "password1234",
       }),
     });
     const { accessToken: userToken } = await loginRes.json();

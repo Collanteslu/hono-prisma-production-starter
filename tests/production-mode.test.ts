@@ -56,6 +56,33 @@ describe("NODE_ENV=production", () => {
     expect(body.endpoints.documentation).toBe("/docs");
   });
 
+  it("hides health details by default and restores them with HEALTH_DETAILS=true", async () => {
+    const hidden = await loadApp({
+      NODE_ENV: "production",
+      MAIL_TRANSPORT: "none",
+      ENABLE_DOCS: "",
+    });
+    const hiddenBody = (await (await hidden.request("/healthz")).json()) as {
+      uptimeSeconds?: number;
+      database: { latencyMs?: number };
+    };
+    expect(hiddenBody.uptimeSeconds).toBeUndefined();
+    expect(hiddenBody.database.latencyMs).toBeUndefined();
+
+    const shown = await loadApp({
+      NODE_ENV: "production",
+      MAIL_TRANSPORT: "none",
+      ENABLE_DOCS: "",
+      HEALTH_DETAILS: "true",
+    });
+    const shownBody = (await (await shown.request("/healthz")).json()) as {
+      uptimeSeconds?: number;
+      database: { latencyMs?: number };
+    };
+    expect(shownBody.uptimeSeconds).toBeTypeOf("number");
+    expect(shownBody.database.latencyMs).toBeTypeOf("number");
+  });
+
   it("writes access-log lines without ANSI colour escapes", async () => {
     const lines: string[] = [];
     const app = await loadApp(

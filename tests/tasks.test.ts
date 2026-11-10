@@ -11,7 +11,7 @@ describe("Tasks CRUD & Ownership API", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         email: "ana@example.com",
-        password: "password123",
+        password: "password1234",
       }),
     });
 

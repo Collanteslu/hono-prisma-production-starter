@@ -83,7 +83,7 @@ export async function createSessionAndTokens(
       data: {
         id: sessionId,
         userId: user.id,
-        userAgent: userAgent || "Unknown Client",
+        userAgent: userAgent?.slice(0, 512) || "Unknown Client",
         ipAddress: ipAddress || "unknown",
         isActive: true,
         expiresAt: refreshExpiresAt,
