@@ -458,7 +458,7 @@ The tables describe the default `AUTH_MODE=full`. With `basic`, the recovery, ve
 | Method | Endpoint | Description | Auth |
 |---|---|---|---|
 | `GET` | `/` | Service overview: name, version, `authMode` and the index of the endpoints mounted in that mode | No |
-| `GET` | `/healthz` | Uptime check & active SQLite query latency in ms (`503` if the database is unreachable) | No |
+| `GET` | `/healthz` | Liveness/readiness check (`503` if the database is unreachable). Uptime and SQLite latency are included only when `HEALTH_DETAILS=true` | No |
 | `GET` | `/docs` | Interactive Scalar OpenAPI web documentation (disabled in production unless `ENABLE_DOCS=true`) | No |
 | `GET` | `/openapi.json` | Raw OpenAPI 3.0 schema (same toggle as `/docs`) | No |
 
@@ -615,7 +615,7 @@ All settings are environment variables, validated at startup (the process exits 
 | `LOGIN_LOCKOUT_MAX_FAILURES` / `LOGIN_LOCKOUT_MINUTES` | `5` / `15` | Failed passwords before an account is locked, and for how long |
 | `AUDIT_RETENTION_DAYS` | `90` | Days to keep audit entries (`0` = forever) |
 | `REFRESH_REUSE_GRACE_SECONDS` | `10` | Window in which reusing a just-rotated refresh token is treated as a concurrent refresh instead of theft |
-| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | — | Bootstrap the first admin in production on an empty database (password 12–72 chars). Rejected with `AUTH_MODE=none` |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | — | Bootstrap the first admin in production on an empty database (password at least `PASSWORD_MIN_LENGTH` characters and at most 72 UTF-8 bytes). Rejected with `AUTH_MODE=none` |
 | `LOG_LEVEL` | `info` in production, `debug` otherwise | Pino log level (`trace` … `fatal`, `silent`) |
 
 An empty value (`VAR=`) is treated as unset, which is what lets Docker Compose forward optional variables without overriding defaults.

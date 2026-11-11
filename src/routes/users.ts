@@ -558,7 +558,9 @@ export const userRoutes = router
       );
     }
     if (emailChanging) {
-      // A pending address is reserved too: two accounts must not race to confirm the same one.
+      // Best-effort reservation: a pending address also blocks a second request. `pendingEmail` is
+      // not unique, so a race can leave the same address pending on two accounts; confirmation
+      // checks it again and the unique `email` column is the final authority.
       const emailTaken = await prisma.user.findFirst({
         where: { id: { not: id }, OR: [{ email }, { pendingEmail: email }] },
         select: { id: true },

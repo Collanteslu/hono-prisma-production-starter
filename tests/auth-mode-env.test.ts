@@ -89,6 +89,38 @@ describe("AUTH_MODE configuration", () => {
     expect(error).toContain("no effect with AUTH_MODE=none");
   });
 
+  it("applies PASSWORD_MIN_LENGTH and bcrypt's byte limit to the admin bootstrap", async () => {
+    const base = {
+      AUTH_MODE: "full",
+      JWT_SECRET: "a".repeat(48),
+      JWT_REFRESH_SECRET: "b".repeat(48),
+      ADMIN_EMAIL: "admin@example.com",
+    };
+
+    const tooShort = await loadEnv({
+      ...base,
+      PASSWORD_MIN_LENGTH: "16",
+      ADMIN_PASSWORD: "a".repeat(12),
+    });
+    expect(tooShort.error).toContain("ADMIN_PASSWORD must be at least 16 characters");
+    expect(tooShort.error).toContain("PASSWORD_MIN_LENGTH");
+
+    const tooManyBytes = await loadEnv({
+      ...base,
+      PASSWORD_MIN_LENGTH: "8",
+      ADMIN_PASSWORD: "é".repeat(40),
+    });
+    expect(tooManyBytes.error).toContain("ADMIN_PASSWORD cannot exceed 72 bytes");
+    expect(tooManyBytes.error).not.toContain("ADMIN_PASSWORD must be at least");
+
+    const accepted = await loadEnv({
+      ...base,
+      PASSWORD_MIN_LENGTH: "8",
+      ADMIN_PASSWORD: "a".repeat(8),
+    });
+    expect(accepted.error).toBeNull();
+  });
+
   it("only allows REQUIRE_EMAIL_VERIFICATION with AUTH_MODE=full", async () => {
     for (const mode of ["none", "basic"]) {
       const { error } = await loadEnv({ AUTH_MODE: mode, REQUIRE_EMAIL_VERIFICATION: "true" });

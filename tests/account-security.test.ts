@@ -523,6 +523,34 @@ describe("Emailed tokens after an email or password change", () => {
       body: JSON.stringify(body),
     });
 
+  it("clears the pending address and returns 409 if it is taken before the update", async () => {
+    const user = await createTestUser();
+    const newEmail = `moved-${randomUUID()}@example.com`;
+    const before = outbox.length;
+    expect((await putUser(user, { email: newEmail, currentPassword: user.password })).status).toBe(
+      200,
+    );
+    const token = await tokenEmailedTo(newEmail, before);
+
+    // An account claims the address after the request but before the confirmation.
+    const occupant = await createTestUser();
+    await prisma.user.update({ where: { id: occupant.user.id }, data: { email: newEmail } });
+
+    // Make the handler's pre-check miss it, so the unique constraint rejects the update itself.
+    const findFirst = vi.spyOn(prisma.user, "findFirst").mockResolvedValueOnce(null);
+    try {
+      const confirm = await post("/api/auth/verify-email", { token });
+      expect(confirm.status).toBe(409);
+      expect((await confirm.json()).message).toContain("already in use");
+    } finally {
+      findFirst.mockRestore();
+    }
+
+    const stored = await prisma.user.findUniqueOrThrow({ where: { id: user.user.id } });
+    expect(stored.email).toBe(user.email);
+    expect(stored.pendingEmail).toBeNull();
+  });
+
   it("a reset link sent to the old address stops working once the email is confirmed", async () => {
     const user = await createTestUser();
     const before = outbox.length;

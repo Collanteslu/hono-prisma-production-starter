@@ -11,6 +11,7 @@ get {
 }
 
 docs {
-  Estado del proceso y latencia de la consulta a la base de datos. Sin autenticación.
-  Responde 200 con database.status "connected", o 503 si la base de datos no responde.
+  Estado del proceso y conectividad con SQLite. Sin autenticación. Uptime y latencia solo
+  se incluyen cuando HEALTH_DETAILS=true. Responde 200 con database.status "connected", o 503
+  si la base de datos no responde.
 }

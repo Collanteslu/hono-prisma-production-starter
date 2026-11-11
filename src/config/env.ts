@@ -45,7 +45,8 @@ const envSchema = z
     // 2 = e.g. Cloudflare + Traefik). Only used when TRUST_PROXY is enabled.
     TRUST_PROXY_HOPS: z.coerce.number().int().min(1).max(10).default(1),
     ADMIN_EMAIL: z.string().email().optional(),
-    ADMIN_PASSWORD: z.string().min(12).max(72).optional(),
+    // Length is checked in superRefine against PASSWORD_MIN_LENGTH and bcrypt's 72-byte limit
+    ADMIN_PASSWORD: z.string().optional(),
     // Comma-separated list of allowed CORS origins ("*" allows any origin). When unset it defaults to
     // "*" outside production and to no cross-origin access at all in production.
     CORS_ORIGINS: z
@@ -133,6 +134,23 @@ const envSchema = z
         message:
           "ADMIN_EMAIL / ADMIN_PASSWORD have no effect with AUTH_MODE=none (there are no users)",
       });
+    }
+    if (authEnabled && cfg.ADMIN_PASSWORD) {
+      if (cfg.ADMIN_PASSWORD.length < cfg.PASSWORD_MIN_LENGTH) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["ADMIN_PASSWORD"],
+          message: `ADMIN_PASSWORD must be at least ${cfg.PASSWORD_MIN_LENGTH} characters (PASSWORD_MIN_LENGTH)`,
+        });
+      }
+      if (Buffer.byteLength(cfg.ADMIN_PASSWORD, "utf8") > 72) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["ADMIN_PASSWORD"],
+          message:
+            "ADMIN_PASSWORD cannot exceed 72 bytes (accented characters and emoji take more than one)",
+        });
+      }
     }
     if (cfg.REQUIRE_EMAIL_VERIFICATION && !fullAuth) {
       ctx.addIssue({
