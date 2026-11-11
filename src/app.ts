@@ -189,13 +189,14 @@ if (docsEnabled) {
   );
 }
 
-// Deep Healthcheck endpoint verifying process uptime and SQLite latency
+// Healthcheck endpoint verifying process liveness and SQLite connectivity
 const healthRoute = createRoute({
   method: "get",
   path: "/healthz",
   tags: ["System"],
   summary: "Healthcheck",
-  description: "Estado del proceso y latencia de la consulta a SQLite.",
+  description:
+    "Estado del proceso y conectividad con SQLite. El uptime y la latencia solo se incluyen cuando HEALTH_DETAILS=true.",
   responses: {
     200: jsonResponse(healthResponseSchema, "Servicio saludable"),
     503: jsonResponse(healthResponseSchema, "Base de datos no disponible"),
