@@ -8,6 +8,7 @@ import { createRoute, z } from "@hono/zod-openapi";
 import { env } from "../config/env.js";
 import { prisma } from "../db.js";
 import { recordAudit } from "../lib/audit.js";
+import { logger } from "../lib/logger.js";
 import { createRouter, errorResponses, jsonBody, jsonResponse, secured } from "../lib/openapi.js";
 import { errorResponse, successResponse } from "../lib/response.js";
 import {
@@ -170,7 +171,8 @@ export const mfaRoutes = router
     let step: number | null;
     try {
       step = verifyTotp(decryptSecret(user.totpSecret), code, null);
-    } catch {
+    } catch (error) {
+      logger.error({ err: error, userId: user.id }, "Stored MFA secret could not be decrypted");
       return errorResponse(
         c,
         "Two-factor authentication is temporarily unavailable. Please contact support.",

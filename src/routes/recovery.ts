@@ -8,6 +8,7 @@
 import { createRoute, z } from "@hono/zod-openapi";
 import { env } from "../config/env.js";
 import { prisma } from "../db.js";
+import { Prisma } from "../generated/client/client.js";
 import { recordAudit } from "../lib/audit.js";
 import { createRouter, errorResponses, jsonBody, jsonResponse } from "../lib/openapi.js";
 import { clearBucket, hitBucket } from "../lib/rateLimitStore.js";
@@ -243,20 +244,34 @@ export const recoveryRoutes = router
     }
 
     const oldEmail = user.email;
-    await prisma.$transaction([
-      prisma.user.update({
-        where: { id: user.id },
-        data: {
-          email: consumed.email,
-          pendingEmail: null,
-          // The link proves control of the new mailbox
-          emailVerifiedAt: new Date(),
-        },
-      }),
-      deletePendingAuthTokensOp(user.id),
-      // The address controls password recovery: every device must sign in again with it.
-      ...userSessionRevocationOps(user.id),
-    ]);
+    try {
+      await prisma.$transaction([
+        prisma.user.update({
+          where: { id: user.id },
+          data: {
+            email: consumed.email,
+            pendingEmail: null,
+            // The link proves control of the new mailbox
+            emailVerifiedAt: new Date(),
+          },
+        }),
+        deletePendingAuthTokensOp(user.id),
+        // The address controls password recovery: every device must sign in again with it.
+        ...userSessionRevocationOps(user.id),
+      ]);
+    } catch (error) {
+      // The check above is only a fast path: another account can claim the address before this
+      // transaction commits. The unique index is the final authority; clear the now-useless pending
+      // address and answer the same 409 instead of the generic constraint error.
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+        await prisma.user.updateMany({
+          where: { id: user.id, pendingEmail: consumed.email },
+          data: { pendingEmail: null },
+        });
+        return errorResponse(c, "That email address is already in use by another account.", 409);
+      }
+      throw error;
+    }
 
     inBackground(() => sendEmailChangedNotice({ name: user.name, email: oldEmail }));
     await recordAudit(c, {
