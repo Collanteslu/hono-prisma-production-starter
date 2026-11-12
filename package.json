@@ -42,7 +42,7 @@
   "devDependencies": {
     "@apidevtools/swagger-parser": "^13.1.0",
     "@biomejs/biome": "^2.5.14",
-    "@types/bcryptjs": "^2.4.6",
+    "@types/bcryptjs": "^3.0.0",
     "@types/node": "^26.6.3",
     "@types/nodemailer": "^8.0.2",
     "@vitest/coverage-v8": "^5.0.2",
